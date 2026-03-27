@@ -1,6 +1,6 @@
 """
-Mean Reversion Trading Bot — Single-file version (easy deploy)
-Receives TradingView JSON alerts → executes orders on Bybit or Capital.com
+Mean Reversion Trading Bot â Single-file version (easy deploy)
+Receives TradingView JSON alerts â executes orders on Bybit or Capital.com
 """
 
 from __future__ import annotations
@@ -23,13 +23,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  CONFIG  —  all values come from environment variables (set in Railway)
-# ══════════════════════════════════════════════════════════════════════════════
+# ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+#  CONFIG  â  all values come from environment variables (set in Railway)
+# ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 EXCHANGE         = os.getenv("EXCHANGE", "CAPITAL").upper()  # BYBIT or CAPITAL
 MAX_OPEN_TRADES  = int(os.getenv("MAX_OPEN_TRADES", "3"))
 DEFAULT_QTY      = float(os.getenv("DEFAULT_QTY", "0.01"))   # fallback if RISK_PCT=0
 RISK_PCT         = float(os.getenv("RISK_PCT", "10"))         # % of balance per trade (0 = disabled)
+TP_PCT           = float(os.getenv("TP_PCT", "3"))            # take-profit % above entry (0 = disabled)
+SL_PCT           = float(os.getenv("SL_PCT", "1.5"))          # stop-loss % below entry  (0 = disabled)
 WEBHOOK_SECRET   = os.getenv("WEBHOOK_SECRET", "")
 
 # Bybit
@@ -43,9 +45,9 @@ CAPITAL_EMAIL    = os.getenv("CAPITAL_EMAIL", "")
 CAPITAL_PASSWORD = os.getenv("CAPITAL_PASSWORD", "")
 CAPITAL_DEMO     = os.getenv("CAPITAL_DEMO", "true").lower() == "true"
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 #  LOGGING
-# ══════════════════════════════════════════════════════════════════════════════
+# ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 logging.basicConfig(
     level   = logging.INFO,
     format  = "%(asctime)s | %(levelname)-8s | %(message)s",
@@ -53,9 +55,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("bot")
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  TRADE MANAGER  —  in-memory tracker (max trades safety guard)
-# ══════════════════════════════════════════════════════════════════════════════
+# ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+#  TRADE MANAGER  â  in-memory tracker (max trades safety guard)
+# ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 @dataclass
 class Trade:
     order_id: str
@@ -91,9 +93,9 @@ class TradeManager:
 
 trade_mgr = TradeManager(max_trades=MAX_OPEN_TRADES)
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  BYBIT V5  —  order execution
-# ══════════════════════════════════════════════════════════════════════════════
+# ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+#  BYBIT V5  â  order execution
+# ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 BYBIT_BASE = "https://api-testnet.bybit.com" if BYBIT_TESTNET else "https://api.bybit.com"
 
 def _bybit_sign(body: dict, ts: str) -> str:
@@ -125,7 +127,7 @@ async def bybit_buy(symbol: str, qty: float, sl=None, tp=None) -> dict:
     data = r.json()
     if data.get("retCode") != 0:
         raise RuntimeError(f"Bybit error {data.get('retCode')}: {data.get('retMsg')}")
-    log.info("✅ Bybit order placed | orderId=%s", data["result"].get("orderId"))
+    log.info("â Bybit order placed | orderId=%s", data["result"].get("orderId"))
     return data["result"]
 
 async def bybit_close(symbol: str) -> dict:
@@ -142,9 +144,9 @@ async def bybit_close(symbol: str) -> dict:
         raise RuntimeError(f"Bybit close error: {data.get('retMsg')}")
     return data["result"]
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  CAPITAL.COM  —  order execution
-# ══════════════════════════════════════════════════════════════════════════════
+# ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+#  CAPITAL.COM  â  order execution
+# ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 CAPITAL_BASE  = "https://demo-api-capital.backend-capital.com" if CAPITAL_DEMO else "https://api-capital.backend-capital.com"
 _cap_session: dict = {}
 
@@ -163,7 +165,7 @@ async def _capital_auth() -> tuple[str, str]:
         raise RuntimeError(f"Capital.com auth failed [{r.status_code}]: {r.text[:200]}")
 
     _cap_session.update({"cst": r.headers["CST"], "token": r.headers["X-SECURITY-TOKEN"], "ts": time.time()})
-    log.info("🔑 Capital.com session refreshed")
+    log.info("ð Capital.com session refreshed")
     return _cap_session["cst"], _cap_session["token"]
 
 def _cap_headers(cst, token):
@@ -179,7 +181,7 @@ async def _capital_get_balance() -> float:
     for acc in sorted(accounts, key=lambda a: not a.get("preferred", False)):
         bal = acc.get("balance", {}).get("available", 0)
         if bal > 0:
-            log.info("💷 Balance: %.2f %s (account: %s)", bal, acc.get("currency", "?"), acc.get("accountType", "?"))
+            log.info("ð· Balance: %.2f %s (account: %s)", bal, acc.get("currency", "?"), acc.get("accountType", "?"))
             return float(bal)
     return 0.0
 
@@ -188,7 +190,7 @@ def _calc_qty(price: float, override_qty: float | None) -> float:
     if override_qty and override_qty > 0:
         return override_qty
     if RISK_PCT > 0:
-        # qty is calculated at trade time using live balance — placeholder here;
+        # qty is calculated at trade time using live balance â placeholder here;
         # actual call happens in capital_buy where balance is fetched
         return 0.0   # signal to fetch balance
     return DEFAULT_QTY
@@ -196,31 +198,40 @@ def _calc_qty(price: float, override_qty: float | None) -> float:
 async def capital_buy(symbol: str, qty: float | None, price: float, sl=None, tp=None) -> dict:
     cst, token = await _capital_auth()
 
-    # ── Position sizing ───────────────────────────────────────────────────────
+    # ââ Position sizing âââââââââââââââââââââââââââââââââââââââââââââââââââââââ
     if qty and qty > 0:
-        # Explicit qty from TradingView alert — use as-is
+        # Explicit qty from TradingView alert â use as-is
         final_qty = qty
-        log.info("📐 Sizing: manual qty=%.6f", final_qty)
+        log.info("ð Sizing: manual qty=%.6f", final_qty)
     elif RISK_PCT > 0:
         # Auto-size: allocate RISK_PCT% of available balance
         balance = await _capital_get_balance()
         trade_value = balance * RISK_PCT / 100.0
         final_qty = round(trade_value / price, 4)
-        log.info("📐 Sizing: balance=%.2f × %.1f%% = £%.2f / price=%.4f → qty=%.6f",
+        log.info("ð Sizing: balance=%.2f Ã %.1f%% = Â£%.2f / price=%.4f â qty=%.6f",
                  balance, RISK_PCT, trade_value, price, final_qty)
     else:
         final_qty = DEFAULT_QTY
-        log.info("📐 Sizing: default qty=%.6f", final_qty)
+        log.info("ð Sizing: default qty=%.6f", final_qty)
+
+    # ââ TP / SL safety net ââââââââââââââââââââââââââââââââââââââââââââââââââââ
+    # Use levels from TradingView alert if provided; fall back to env-var %
+    final_tp = tp if tp else (round(price * (1 + TP_PCT / 100), 6) if TP_PCT > 0 else None)
+    final_sl = sl if sl else (round(price * (1 - SL_PCT / 100), 6) if SL_PCT > 0 else None)
+    if final_tp:
+        log.info("ð¯ TP: %.4f (%s)", final_tp, "from alert" if tp else f"auto {TP_PCT}%")
+    if final_sl:
+        log.info("ð SL: %.4f (%s)", final_sl, "from alert" if sl else f"auto {SL_PCT}%")
 
     body: dict = {"epic": symbol, "direction": "BUY", "size": final_qty,
                   "guaranteedStop": False, "trailingStop": False}
-    if sl: body["stopLevel"]   = round(sl, 6)
-    if tp: body["profitLevel"] = round(tp, 6)
+    if final_sl: body["stopLevel"]   = final_sl
+    if final_tp: body["profitLevel"] = final_tp
 
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.post(f"{CAPITAL_BASE}/api/v1/positions", json=body, headers=_cap_headers(cst, token))
     data = r.json()
-    log.info("📋 Capital.com position response [%d]: %s", r.status_code, data)
+    log.info("ð Capital.com position response [%d]: %s", r.status_code, data)
     if r.status_code not in (200, 201):
         raise RuntimeError(f"Capital.com error [{r.status_code}]: {data}")
     # Check for deal-level rejection (Capital.com returns 200 even for rejected deals)
@@ -228,7 +239,7 @@ async def capital_buy(symbol: str, qty: float | None, price: float, sl=None, tp=
     if deal_status in ("REJECTED", "DELETED"):
         reason = data.get("reason", "unknown")
         raise RuntimeError(f"Capital.com deal rejected: status={deal_status}, reason={reason}, full={data}")
-    log.info("✅ Capital.com position opened | dealId=%s | status=%s",
+    log.info("â Capital.com position opened | dealId=%s | status=%s",
              data.get("dealId") or data.get("dealReference"), deal_status)
     return data
 
@@ -243,23 +254,24 @@ async def capital_close(symbol: str) -> dict:
         return {"status": "not_found"}
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.delete(f"{CAPITAL_BASE}/api/v1/positions/{deal_id}", headers=_cap_headers(cst, token))
-    log.info("🔒 Capital.com position closed | dealId=%s", deal_id)
+    log.info("ð Capital.com position closed | dealId=%s", deal_id)
     return r.json()
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 #  FASTAPI APP
-# ══════════════════════════════════════════════════════════════════════════════
+# ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("🚀 Trading Bot started | exchange=%s | max_trades=%d | risk_pct=%.1f%% | demo/testnet=%s",
-             EXCHANGE, MAX_OPEN_TRADES, RISK_PCT, CAPITAL_DEMO if EXCHANGE == "CAPITAL" else BYBIT_TESTNET)
+    log.info("ð Trading Bot started | exchange=%s | max_trades=%d | risk_pct=%.1f%% | tp=%.1f%% | sl=%.1f%% | demo/testnet=%s",
+             EXCHANGE, MAX_OPEN_TRADES, RISK_PCT, TP_PCT, SL_PCT,
+             CAPITAL_DEMO if EXCHANGE == "CAPITAL" else BYBIT_TESTNET)
     yield
-    log.info("🛑 Trading Bot shutting down")
+    log.info("ð Trading Bot shutting down")
 
 app = FastAPI(title="MR Trading Bot", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST"], allow_headers=["*"])
 
-# ── Models ────────────────────────────────────────────────────────────────────
+# ââ Models ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 class AlertPayload(BaseModel):
     action:   Literal["buy", "sell", "close"]
     symbol:   str
@@ -272,13 +284,13 @@ class AlertPayload(BaseModel):
     bb_mid:   float | None = None
     qty:      float | None = None
 
-# ── Security ──────────────────────────────────────────────────────────────────
+# ââ Security ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 def verify_secret(x_webhook_secret: str | None = Header(default=None)):
     if WEBHOOK_SECRET and x_webhook_secret != WEBHOOK_SECRET:
-        log.warning("⚠️ Rejected webhook — bad secret")
+        log.warning("â ï¸ Rejected webhook â bad secret")
         raise HTTPException(status_code=403, detail="Invalid webhook secret")
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# ââ Routes ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 @app.get("/health")
 async def health():
     return {
@@ -288,16 +300,18 @@ async def health():
         "open_trades": trade_mgr.count(),
         "max_trades":  MAX_OPEN_TRADES,
         "risk_pct":    RISK_PCT,
+        "tp_pct":      TP_PCT,
+        "sl_pct":      SL_PCT,
     }
 
 @app.post("/webhook", dependencies=[Depends(verify_secret)])
 async def webhook(payload: AlertPayload):
-    log.info("📩 Alert | action=%s | symbol=%s | price=%.4f | rsi=%s",
+    log.info("ð© Alert | action=%s | symbol=%s | price=%.4f | rsi=%s",
              payload.action, payload.symbol, payload.price, payload.rsi)
 
     if payload.action == "buy":
         if trade_mgr.count() >= MAX_OPEN_TRADES:
-            log.warning("⛔ Skipped — max trades (%d) reached", MAX_OPEN_TRADES)
+            log.warning("â Skipped â max trades (%d) reached", MAX_OPEN_TRADES)
             return {"status": "skipped", "reason": "max_trades_reached", "open": trade_mgr.count()}
 
         if EXCHANGE == "BYBIT":
@@ -324,5 +338,5 @@ async def webhook(payload: AlertPayload):
 
 @app.exception_handler(Exception)
 async def global_error(request: Request, exc: Exception):
-    log.exception("💥 Unhandled error: %s", exc)
+    log.exception("ð¥ Unhandled error: %s", exc)
     return JSONResponse(status_code=500, content={"status": "error", "detail": str(exc)})
