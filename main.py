@@ -34,6 +34,7 @@ LEVERAGE         = float(os.getenv("LEVERAGE", "1"))          # broker leverage 
 TP_PCT           = float(os.getenv("TP_PCT", "3"))            # take-profit % above entry (0 = disabled)
 SL_PCT           = float(os.getenv("SL_PCT", "1.5"))          # stop-loss % below entry  (0 = disabled)
 WEBHOOK_SECRET   = os.getenv("WEBHOOK_SECRET", "")
+ALLOWED_SYMBOLS  = set(s.strip().upper() for s in os.getenv("ALLOWED_SYMBOLS", "UK100").split(",") if s.strip())
 
 # Bybit
 BYBIT_API_KEY    = os.getenv("BYBIT_API_KEY", "")
@@ -310,6 +311,10 @@ async def health():
 async def webhook(payload: AlertPayload):
     log.info("ð© Alert | action=%s | symbol=%s | price=%.4f | rsi=%s",
              payload.action, payload.symbol, payload.price, payload.rsi)
+
+    if payload.symbol.upper() not in ALLOWED_SYMBOLS:
+        log.warning("â Rejected symbol %s â not in whitelist %s", payload.symbol, ALLOWED_SYMBOLS)
+        return {"status": "rejected", "reason": "symbol_not_allowed", "allowed": sorted(ALLOWED_SYMBOLS)}
 
     if payload.action == "buy":
         if trade_mgr.count() >= MAX_OPEN_TRADES:
