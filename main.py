@@ -30,6 +30,7 @@ EXCHANGE         = os.getenv("EXCHANGE", "CAPITAL").upper()  # BYBIT or CAPITAL
 MAX_OPEN_TRADES  = int(os.getenv("MAX_OPEN_TRADES", "3"))
 DEFAULT_QTY      = float(os.getenv("DEFAULT_QTY", "0.01"))   # fallback if RISK_PCT=0
 RISK_PCT         = float(os.getenv("RISK_PCT", "10"))         # % of balance per trade (0 = disabled)
+LEVERAGE         = float(os.getenv("LEVERAGE", "1"))          # broker leverage multiplier (e.g. 10 = 10x)
 TP_PCT           = float(os.getenv("TP_PCT", "3"))            # take-profit % above entry (0 = disabled)
 SL_PCT           = float(os.getenv("SL_PCT", "1.5"))          # stop-loss % below entry  (0 = disabled)
 WEBHOOK_SECRET   = os.getenv("WEBHOOK_SECRET", "")
@@ -204,12 +205,12 @@ async def capital_buy(symbol: str, qty: float | None, price: float, sl=None, tp=
         final_qty = qty
         log.info("ð Sizing: manual qty=%.6f", final_qty)
     elif RISK_PCT > 0:
-        # Auto-size: allocate RISK_PCT% of available balance
+        # Auto-size: allocate RISK_PCT% of available balance, scaled by leverage
         balance = await _capital_get_balance()
-        trade_value = balance * RISK_PCT / 100.0
+        trade_value = balance * RISK_PCT / 100.0 * LEVERAGE
         final_qty = round(trade_value / price, 4)
-        log.info("ð Sizing: balance=%.2f Ã %.1f%% = Â£%.2f / price=%.4f â qty=%.6f",
-                 balance, RISK_PCT, trade_value, price, final_qty)
+        log.info("ð Sizing: balance=%.2f Ã %.1f%% Ã %.0fx leverage = Â£%.2f / price=%.4f â qty=%.6f",
+                 balance, RISK_PCT, LEVERAGE, trade_value, price, final_qty)
     else:
         final_qty = DEFAULT_QTY
         log.info("ð Sizing: default qty=%.6f", final_qty)
@@ -262,8 +263,8 @@ async def capital_close(symbol: str) -> dict:
 # ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("ð Trading Bot started | exchange=%s | max_trades=%d | risk_pct=%.1f%% | tp=%.1f%% | sl=%.1f%% | demo/testnet=%s",
-             EXCHANGE, MAX_OPEN_TRADES, RISK_PCT, TP_PCT, SL_PCT,
+    log.info("ð Trading Bot started | exchange=%s | max_trades=%d | risk_pct=%.1f%% | leverage=%.0fx | tp=%.1f%% | sl=%.1f%% | demo/testnet=%s",
+             EXCHANGE, MAX_OPEN_TRADES, RISK_PCT, LEVERAGE, TP_PCT, SL_PCT,
              CAPITAL_DEMO if EXCHANGE == "CAPITAL" else BYBIT_TESTNET)
     yield
     log.info("ð Trading Bot shutting down")
@@ -300,6 +301,7 @@ async def health():
         "open_trades": trade_mgr.count(),
         "max_trades":  MAX_OPEN_TRADES,
         "risk_pct":    RISK_PCT,
+        "leverage":    LEVERAGE,
         "tp_pct":      TP_PCT,
         "sl_pct":      SL_PCT,
     }
