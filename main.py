@@ -28,7 +28,8 @@ from pydantic import BaseModel, Field
 # ══════════════════════════════════════════════════════════════════════════════
 EXCHANGE         = os.getenv("EXCHANGE", "CAPITAL").upper()  # BYBIT or CAPITAL
 MAX_OPEN_TRADES  = int(os.getenv("MAX_OPEN_TRADES", "3"))
-DEFAULT_QTY      = float(os.getenv("DEFAULT_QTY", "1"))
+DEFAULT_QTY      = float(os.getenv("DEFAULT_QTY", "0.01"))   # fallback if RISK_PCT=0
+RISK_PCT         = float(os.getenv("RISK_PCT", "10"))         # % of balance per trade (0 = disabled)
 WEBHOOK_SECRET   = os.getenv("WEBHOOK_SECRET", "")
 
 # Bybit
@@ -168,9 +169,50 @@ async def _capital_auth() -> tuple[str, str]:
 def _cap_headers(cst, token):
     return {"CST": cst, "X-SECURITY-TOKEN": token, "Content-Type": "application/json"}
 
-async def capital_buy(symbol: str, qty: float, sl=None, tp=None) -> dict:
+async def _capital_get_balance() -> float:
+    """Fetch available balance from the preferred Capital.com account."""
     cst, token = await _capital_auth()
-    body: dict = {"epic": symbol, "direction": "BUY", "size": qty,
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.get(f"{CAPITAL_BASE}/api/v1/accounts", headers=_cap_headers(cst, token))
+    accounts = r.json().get("accounts", [])
+    # Use preferred account; fall back to first account
+    for acc in sorted(accounts, key=lambda a: not a.get("preferred", False)):
+        bal = acc.get("balance", {}).get("available", 0)
+        if bal > 0:
+            log.info("💷 Balance: %.2f %s (account: %s)", bal, acc.get("currency", "?"), acc.get("accountType", "?"))
+            return float(bal)
+    return 0.0
+
+def _calc_qty(price: float, override_qty: float | None) -> float:
+    """Return trade size: payload qty > RISK_PCT sizing > DEFAULT_QTY fallback."""
+    if override_qty and override_qty > 0:
+        return override_qty
+    if RISK_PCT > 0:
+        # qty is calculated at trade time using live balance — placeholder here;
+        # actual call happens in capital_buy where balance is fetched
+        return 0.0   # signal to fetch balance
+    return DEFAULT_QTY
+
+async def capital_buy(symbol: str, qty: float | None, price: float, sl=None, tp=None) -> dict:
+    cst, token = await _capital_auth()
+
+    # ── Position sizing ───────────────────────────────────────────────────────
+    if qty and qty > 0:
+        # Explicit qty from TradingView alert — use as-is
+        final_qty = qty
+        log.info("📐 Sizing: manual qty=%.6f", final_qty)
+    elif RISK_PCT > 0:
+        # Auto-size: allocate RISK_PCT% of available balance
+        balance = await _capital_get_balance()
+        trade_value = balance * RISK_PCT / 100.0
+        final_qty = round(trade_value / price, 4)
+        log.info("📐 Sizing: balance=%.2f × %.1f%% = £%.2f / price=%.4f → qty=%.6f",
+                 balance, RISK_PCT, trade_value, price, final_qty)
+    else:
+        final_qty = DEFAULT_QTY
+        log.info("📐 Sizing: default qty=%.6f", final_qty)
+
+    body: dict = {"epic": symbol, "direction": "BUY", "size": final_qty,
                   "guaranteedStop": False, "trailingStop": False}
     if sl: body["stopLevel"]   = round(sl, 6)
     if tp: body["profitLevel"] = round(tp, 6)
@@ -178,9 +220,16 @@ async def capital_buy(symbol: str, qty: float, sl=None, tp=None) -> dict:
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.post(f"{CAPITAL_BASE}/api/v1/positions", json=body, headers=_cap_headers(cst, token))
     data = r.json()
+    log.info("📋 Capital.com position response [%d]: %s", r.status_code, data)
     if r.status_code not in (200, 201):
         raise RuntimeError(f"Capital.com error [{r.status_code}]: {data}")
-    log.info("✅ Capital.com position opened | dealId=%s", data.get("dealId") or data.get("dealReference"))
+    # Check for deal-level rejection (Capital.com returns 200 even for rejected deals)
+    deal_status = data.get("status", "")
+    if deal_status in ("REJECTED", "DELETED"):
+        reason = data.get("reason", "unknown")
+        raise RuntimeError(f"Capital.com deal rejected: status={deal_status}, reason={reason}, full={data}")
+    log.info("✅ Capital.com position opened | dealId=%s | status=%s",
+             data.get("dealId") or data.get("dealReference"), deal_status)
     return data
 
 async def capital_close(symbol: str) -> dict:
@@ -202,8 +251,8 @@ async def capital_close(symbol: str) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("🚀 Trading Bot started | exchange=%s | max_trades=%d | demo/testnet=%s",
-             EXCHANGE, MAX_OPEN_TRADES, CAPITAL_DEMO if EXCHANGE == "CAPITAL" else BYBIT_TESTNET)
+    log.info("🚀 Trading Bot started | exchange=%s | max_trades=%d | risk_pct=%.1f%% | demo/testnet=%s",
+             EXCHANGE, MAX_OPEN_TRADES, RISK_PCT, CAPITAL_DEMO if EXCHANGE == "CAPITAL" else BYBIT_TESTNET)
     yield
     log.info("🛑 Trading Bot shutting down")
 
@@ -238,6 +287,7 @@ async def health():
         "mode":        "demo/testnet" if (CAPITAL_DEMO if EXCHANGE == "CAPITAL" else BYBIT_TESTNET) else "LIVE",
         "open_trades": trade_mgr.count(),
         "max_trades":  MAX_OPEN_TRADES,
+        "risk_pct":    RISK_PCT,
     }
 
 @app.post("/webhook", dependencies=[Depends(verify_secret)])
@@ -250,12 +300,13 @@ async def webhook(payload: AlertPayload):
             log.warning("⛔ Skipped — max trades (%d) reached", MAX_OPEN_TRADES)
             return {"status": "skipped", "reason": "max_trades_reached", "open": trade_mgr.count()}
 
-        qty = payload.qty or DEFAULT_QTY
         if EXCHANGE == "BYBIT":
+            qty = payload.qty or DEFAULT_QTY
             order = await bybit_buy(payload.symbol, qty, payload.sl, payload.tp)
             oid = order.get("orderId", "unknown")
         else:
-            order = await capital_buy(payload.symbol, qty, payload.sl, payload.tp)
+            # Capital.com: qty=None triggers RISK_PCT auto-sizing inside capital_buy
+            order = await capital_buy(payload.symbol, payload.qty, payload.price, payload.sl, payload.tp)
             oid = order.get("dealId") or order.get("dealReference", "unknown")
 
         trade_mgr.add(oid, payload.symbol, payload.price, payload.sl, payload.tp)
