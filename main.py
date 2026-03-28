@@ -31,10 +31,10 @@ MAX_OPEN_TRADES  = int(os.getenv("MAX_OPEN_TRADES", "3"))
 DEFAULT_QTY      = float(os.getenv("DEFAULT_QTY", "0.01"))   # fallback if RISK_PCT=0
 RISK_PCT         = float(os.getenv("RISK_PCT", "10"))         # % of balance per trade (0 = disabled)
 LEVERAGE         = float(os.getenv("LEVERAGE", "1"))          # broker leverage multiplier (e.g. 10 = 10x)
-TP_PCT           = float(os.getenv("TP_PCT", "3"))            # take-profit % above entry (0 = disabled)
-SL_PCT           = float(os.getenv("SL_PCT", "1.5"))          # stop-loss % below entry  (0 = disabled)
+TP_PCT           = float(os.getenv("TP_PCT", "0.15"))         # take-profit % from entry (0 = disabled)
+SL_PCT           = float(os.getenv("SL_PCT", "0.075"))        # stop-loss % from entry   (0 = disabled)
 WEBHOOK_SECRET   = os.getenv("WEBHOOK_SECRET", "")
-ALLOWED_SYMBOLS  = set(s.strip().upper() for s in os.getenv("ALLOWED_SYMBOLS", "UK100").split(",") if s.strip())
+ALLOWED_SYMBOLS  = set(s.strip().upper() for s in os.getenv("ALLOWED_SYMBOLS", "UK100,BRTOIL").split(",") if s.strip())
 
 # Bybit
 BYBIT_API_KEY    = os.getenv("BYBIT_API_KEY", "")
@@ -114,10 +114,12 @@ def _bybit_headers(body: dict) -> dict:
         "Content-Type":       "application/json",
     }
 
-async def bybit_buy(symbol: str, qty: float, sl=None, tp=None) -> dict:
+async def bybit_open(symbol: str, qty: float, direction: str = "BUY", sl=None, tp=None) -> dict:
+    """Open a long (BUY) or short (SELL) market position on Bybit."""
+    bybit_side = "Buy" if direction.upper() == "BUY" else "Sell"
     body: dict = {
         "category": "linear", "symbol": symbol,
-        "side": "Buy", "orderType": "Market",
+        "side": bybit_side, "orderType": "Market",
         "qty": str(qty), "timeInForce": "IOC",
         "reduceOnly": False, "closeOnTrigger": False, "positionIdx": 0,
     }
@@ -129,13 +131,15 @@ async def bybit_buy(symbol: str, qty: float, sl=None, tp=None) -> dict:
     data = r.json()
     if data.get("retCode") != 0:
         raise RuntimeError(f"Bybit error {data.get('retCode')}: {data.get('retMsg')}")
-    log.info("â Bybit order placed | orderId=%s", data["result"].get("orderId"))
+    log.info("â Bybit %s order placed | orderId=%s", bybit_side, data["result"].get("orderId"))
     return data["result"]
 
-async def bybit_close(symbol: str) -> dict:
+async def bybit_close(symbol: str, position_direction: str = "BUY") -> dict:
+    """Close an existing position â closes in the opposite direction to the original trade."""
+    close_side = "Sell" if position_direction.upper() == "BUY" else "Buy"
     body: dict = {
         "category": "linear", "symbol": symbol,
-        "side": "Sell", "orderType": "Market",
+        "side": close_side, "orderType": "Market",
         "qty": "0", "timeInForce": "IOC",
         "reduceOnly": True, "closeOnTrigger": True, "positionIdx": 0,
     }
@@ -197,16 +201,18 @@ def _calc_qty(price: float, override_qty: float | None) -> float:
         return 0.0   # signal to fetch balance
     return DEFAULT_QTY
 
-async def capital_buy(symbol: str, qty: float | None, price: float, sl=None, tp=None) -> dict:
+async def capital_open(symbol: str, qty: float | None, price: float,
+                       direction: str = "BUY", sl=None, tp=None) -> dict:
+    """Open a long (BUY) or short (SELL) position on Capital.com."""
     cst, token = await _capital_auth()
+    cap_direction = "BUY" if direction.upper() == "BUY" else "SELL"
+    is_long = cap_direction == "BUY"
 
     # ââ Position sizing âââââââââââââââââââââââââââââââââââââââââââââââââââââââ
     if qty and qty > 0:
-        # Explicit qty from TradingView alert â use as-is
         final_qty = qty
         log.info("ð Sizing: manual qty=%.6f", final_qty)
     elif RISK_PCT > 0:
-        # Auto-size: allocate RISK_PCT% of available balance, scaled by leverage
         balance = await _capital_get_balance()
         trade_value = balance * RISK_PCT / 100.0 * LEVERAGE
         final_qty = round(trade_value / price, 4)
@@ -216,16 +222,25 @@ async def capital_buy(symbol: str, qty: float | None, price: float, sl=None, tp=
         final_qty = DEFAULT_QTY
         log.info("ð Sizing: default qty=%.6f", final_qty)
 
-    # ââ TP / SL safety net ââââââââââââââââââââââââââââââââââââââââââââââââââââ
-    # Use levels from TradingView alert if provided; fall back to env-var %
-    final_tp = tp if tp else (round(price * (1 + TP_PCT / 100), 6) if TP_PCT > 0 else None)
-    final_sl = sl if sl else (round(price * (1 - SL_PCT / 100), 6) if SL_PCT > 0 else None)
-    if final_tp:
-        log.info("ð¯ TP: %.4f (%s)", final_tp, "from alert" if tp else f"auto {TP_PCT}%")
-    if final_sl:
-        log.info("ð SL: %.4f (%s)", final_sl, "from alert" if sl else f"auto {SL_PCT}%")
+    # ââ TP / SL â direction-aware âââââââââââââââââââââââââââââââââââââââââââââ
+    # Long:  TP above entry, SL below entry
+    # Short: TP below entry, SL above entry
+    if is_long:
+        auto_tp = round(price * (1 + TP_PCT / 100), 6) if TP_PCT > 0 else None
+        auto_sl = round(price * (1 - SL_PCT / 100), 6) if SL_PCT > 0 else None
+    else:
+        auto_tp = round(price * (1 - TP_PCT / 100), 6) if TP_PCT > 0 else None
+        auto_sl = round(price * (1 + SL_PCT / 100), 6) if SL_PCT > 0 else None
 
-    body: dict = {"epic": symbol, "direction": "BUY", "size": final_qty,
+    final_tp = tp if tp else auto_tp
+    final_sl = sl if sl else auto_sl
+
+    if final_tp:
+        log.info("ð¯ TP: %.4f (%s)", final_tp, "from alert" if tp else f"auto {TP_PCT}% {'above' if is_long else 'below'}")
+    if final_sl:
+        log.info("ð SL: %.4f (%s)", final_sl, "from alert" if sl else f"auto {SL_PCT}% {'below' if is_long else 'above'}")
+
+    body: dict = {"epic": symbol, "direction": cap_direction, "size": final_qty,
                   "guaranteedStop": False, "trailingStop": False}
     if final_sl: body["stopLevel"]   = final_sl
     if final_tp: body["profitLevel"] = final_tp
@@ -233,16 +248,15 @@ async def capital_buy(symbol: str, qty: float | None, price: float, sl=None, tp=
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.post(f"{CAPITAL_BASE}/api/v1/positions", json=body, headers=_cap_headers(cst, token))
     data = r.json()
-    log.info("ð Capital.com position response [%d]: %s", r.status_code, data)
+    log.info("ð Capital.com %s response [%d]: %s", cap_direction, r.status_code, data)
     if r.status_code not in (200, 201):
         raise RuntimeError(f"Capital.com error [{r.status_code}]: {data}")
-    # Check for deal-level rejection (Capital.com returns 200 even for rejected deals)
     deal_status = data.get("status", "")
     if deal_status in ("REJECTED", "DELETED"):
         reason = data.get("reason", "unknown")
         raise RuntimeError(f"Capital.com deal rejected: status={deal_status}, reason={reason}, full={data}")
-    log.info("â Capital.com position opened | dealId=%s | status=%s",
-             data.get("dealId") or data.get("dealReference"), deal_status)
+    log.info("â Capital.com %s position opened | dealId=%s | status=%s",
+             cap_direction, data.get("dealId") or data.get("dealReference"), deal_status)
     return data
 
 async def capital_close(symbol: str) -> dict:
@@ -264,8 +278,9 @@ async def capital_close(symbol: str) -> dict:
 # ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("ð Trading Bot started | exchange=%s | max_trades=%d | risk_pct=%.1f%% | leverage=%.0fx | tp=%.1f%% | sl=%.1f%% | demo/testnet=%s",
+    log.info("ð Trading Bot started | exchange=%s | max_trades=%d | risk_pct=%.1f%% | leverage=%.0fx | tp=%.3f%% | sl=%.3f%% | symbols=%s | demo/testnet=%s",
              EXCHANGE, MAX_OPEN_TRADES, RISK_PCT, LEVERAGE, TP_PCT, SL_PCT,
+             sorted(ALLOWED_SYMBOLS),
              CAPITAL_DEMO if EXCHANGE == "CAPITAL" else BYBIT_TESTNET)
     yield
     log.info("ð Trading Bot shutting down")
@@ -302,9 +317,10 @@ async def health():
         "open_trades": trade_mgr.count(),
         "max_trades":  MAX_OPEN_TRADES,
         "risk_pct":    RISK_PCT,
-        "leverage":    LEVERAGE,
-        "tp_pct":      TP_PCT,
-        "sl_pct":      SL_PCT,
+        "leverage":        LEVERAGE,
+        "tp_pct":          TP_PCT,
+        "sl_pct":          SL_PCT,
+        "allowed_symbols": sorted(ALLOWED_SYMBOLS),
     }
 
 @app.post("/webhook", dependencies=[Depends(verify_secret)])
@@ -316,24 +332,28 @@ async def webhook(payload: AlertPayload):
         log.warning("â Rejected symbol %s â not in whitelist %s", payload.symbol, ALLOWED_SYMBOLS)
         return {"status": "rejected", "reason": "symbol_not_allowed", "allowed": sorted(ALLOWED_SYMBOLS)}
 
-    if payload.action == "buy":
+    if payload.action in ("buy", "sell"):
+        # "buy" = open long, "sell" = open short
+        direction = "BUY" if payload.action == "buy" else "SELL"
+
         if trade_mgr.count() >= MAX_OPEN_TRADES:
             log.warning("â Skipped â max trades (%d) reached", MAX_OPEN_TRADES)
             return {"status": "skipped", "reason": "max_trades_reached", "open": trade_mgr.count()}
 
         if EXCHANGE == "BYBIT":
             qty = payload.qty or DEFAULT_QTY
-            order = await bybit_buy(payload.symbol, qty, payload.sl, payload.tp)
+            order = await bybit_open(payload.symbol, qty, direction, payload.sl, payload.tp)
             oid = order.get("orderId", "unknown")
         else:
-            # Capital.com: qty=None triggers RISK_PCT auto-sizing inside capital_buy
-            order = await capital_buy(payload.symbol, payload.qty, payload.price, payload.sl, payload.tp)
+            # Capital.com: qty=None triggers RISK_PCT auto-sizing inside capital_open
+            order = await capital_open(payload.symbol, payload.qty, payload.price, direction, payload.sl, payload.tp)
             oid = order.get("dealId") or order.get("dealReference", "unknown")
 
         trade_mgr.add(oid, payload.symbol, payload.price, payload.sl, payload.tp)
-        return {"status": "order_placed", "order_id": oid, "open_trades": trade_mgr.count()}
+        log.info("ð %s trade opened | symbol=%s | direction=%s | id=%s", payload.action.upper(), payload.symbol, direction, oid)
+        return {"status": "order_placed", "direction": direction, "order_id": oid, "open_trades": trade_mgr.count()}
 
-    elif payload.action in ("close", "sell"):
+    elif payload.action == "close":
         if EXCHANGE == "BYBIT":
             result = await bybit_close(payload.symbol)
         else:
