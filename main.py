@@ -323,6 +323,20 @@ async def health():
         "allowed_symbols": sorted(ALLOWED_SYMBOLS),
     }
 
+@app.get("/markets")
+async def search_markets(q: str = "brent"):
+    """Search Capital.com markets by name â useful for finding the correct epic code."""
+    if EXCHANGE != "CAPITAL":
+        return {"error": "only available when EXCHANGE=CAPITAL"}
+    cst, token = await _capital_auth()
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(
+            f"{CAPITAL_BASE}/api/v1/markets",
+            params={"searchTerm": q, "limit": 10},
+            headers=_cap_headers(cst, token),
+        )
+    return r.json()
+
 @app.post("/webhook", dependencies=[Depends(verify_secret)])
 async def webhook(payload: AlertPayload):
     log.info("ð© Alert | action=%s | symbol=%s | price=%.4f | rsi=%s",
