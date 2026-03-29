@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -311,6 +312,7 @@
 </main>
 
 <!-- ââ TRADINGVIEW CHARTS ââ -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script src="https://s3.tradingview.com/tv.js"></script>
 <script>
 // âââââââââââââââââââââââââââââââââââââââââââââ
@@ -527,24 +529,13 @@ async function loadNews(query, elId, maxItems = 6) {
 // TRADINGVIEW CHARTS
 // âââââââââââââââââââââââââââââââââââââââââââââ
 function initCharts() {
-  new TradingView.widget({
-    container_id: 'chart-uk100',
-    symbol: 'TVC:UKX',
-    interval: '60',
-    timezone: 'Europe/London',
-    theme: 'dark',
-    style: '1',
-    locale: 'en',
-    toolbar_bg: '#161b22',
-    enable_publishing: false,
-    hide_top_toolbar: true,
-    hide_legend: false,
-    save_image: false,
-    height: 220,
-    width: '100%',
-    backgroundColor: '#161b22',
-    gridColor: 'rgba(33,38,45,0.8)',
-  });
+  // UK100 uses Chart.js with live Capital.com candle data
+  var uk100Canvas = document.createElement('canvas');
+  uk100Canvas.id = 'uk100-canvas';
+  uk100Canvas.style.cssText = 'width:100%;height:100%;display:block';
+  document.getElementById('chart-uk100').appendChild(uk100Canvas);
+  window._uk100Chart = null;
+  loadUK100Chart();
 
   new TradingView.widget({
     container_id: 'chart-brent',
@@ -577,6 +568,7 @@ async function loadAll() {
     loadAccount(),
     loadPositions(),
     loadPrice('UK100', 'uk100'),
+      loadUK100Chart(),
     loadPrice('OIL_BRENT', 'brent'),
     loadNews('FTSE 100 UK100 stock market', 'uk100-news'),
     loadNews('Brent crude oil price', 'brent-news'),
