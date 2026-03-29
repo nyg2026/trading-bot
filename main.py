@@ -845,13 +845,12 @@ async def get_market_price(epic: str):
 
 
 @app.get("/candles/{epic}")
-async def candles_endpoint(epic: str, resolution: str = None, count: int = None):
+async def candles_endpoint(epic: str):
     """Return OHLCV candle data for the dashboard chart."""
     try:
-        res = resolution or CANDLE_RES
-        cnt = min(count or CANDLE_COUNT, 100)
-        candles = await fetch_candles(epic.upper(), res, cnt)
-        return {"epic": epic.upper(), "resolution": res, "candles": candles}
+        opens, highs, lows, closes = await fetch_candles(epic.upper())
+        return {"epic": epic.upper(), "resolution": CANDLE_RES,
+                "opens": opens, "highs": highs, "lows": lows, "closes": closes}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
