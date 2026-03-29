@@ -843,6 +843,18 @@ async def get_market_price(epic: str):
     return r.json()
 
 
+
+@app.get("/candles/{epic}")
+async def candles_endpoint(epic: str, resolution: str = None, count: int = None):
+    """Return OHLCV candle data for the dashboard chart."""
+    try:
+        res = resolution or CANDLE_RES
+        cnt = min(count or CANDLE_COUNT, 100)
+        candles = await fetch_candles(epic.upper(), res, cnt)
+        return {"epic": epic.upper(), "resolution": res, "candles": candles}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/markets")
 async def search_markets(q: str = "brent"):
     if EXCHANGE != "CAPITAL": return {"error": "only available when EXCHANGE=CAPITAL"}
