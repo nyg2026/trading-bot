@@ -501,24 +501,28 @@ async function loadPrice(epic, prefix) {
 // âââââââââââââââââââââââââââââââââââââââââââââ
 // NEWS  (Google News RSS via rss2json.com)
 // ââââââââââââââââââââââââââââââââââââââââââââââ
-async function loadNews(query, elId, maxItems = 6) {
-  const el = document.getElementById(elId);
+async function loadNews(query, elId, maxItems) {
+  maxItems = maxItems || 6;
+  var el = document.getElementById(elId);
   try {
-    const rssUrl = encodeURIComponent(`https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-GB&gl=GB&ceid=GB:en`);
-    const r = await fetch(`${RSS_PROXY}${rssUrl}&count=${maxItems}`);
-    const d = await r.json();
-    const items = (d.items || []).slice(0, maxItems);
-    if (!items.length) {
+    var googleRss = 'https://news.google.com/rss/search?q=' + encodeURIComponent(query) + '&hl=en-GB&gl=GB&ceid=GB:en';
+    var resp = await fetch(RSS_PROXY + encodeURIComponent(googleRss));
+    var raw = await resp.json();
+    var parser = new DOMParser();
+    var xml = parser.parseFromString(raw.contents || '', 'application/xml');
+    var allItems = Array.from(xml.querySelectorAll('item')).slice(0, maxItems);
+    if (!allItems.length) {
       el.innerHTML = '<li class="news-item"><span style="color:var(--muted)">No news found</span></li>';
       return;
     }
-    el.innerHTML = items.map(item => {
-      const source = item.author || item.source?.name || '';
-      const pubDate = item.pubDate ? timeAgo(item.pubDate) : '';
-      return `<li class="news-item">
-        <a href="${item.link}" target="_blank" rel="noopener noreferrer">${item.title}</a>
-        <div class="news-meta">${source ? `<span class="news-source">${source}</span> Â· ` : ''}${pubDate}</div>
-      </li>`;
+    el.innerHTML = allItems.map(function(item) {
+      var title = (item.querySelector('title') || {}).textContent || '';
+      var guid  = (item.querySelector('guid')  || {}).textContent || '#';
+      var src   = (item.querySelector('source') || {}).textContent || '';
+      var pub   = (item.querySelector('pubDate') || {}).textContent || '';
+      var ago   = pub ? timeAgo(new Date(pub)) : '';
+      return '<li class="news-item"><a href="' + guid + '" target="_blank" rel="noopener noreferrer">' + title + '</a>' +
+        '<div class="news-meta">' + (src ? '<span class="news-source">' + src + '</span> &middot; ' : '') + ago + '</div></li>';
     }).join('');
   } catch (e) {
     el.innerHTML = '<li class="news-item"><span style="color:var(--muted)">News unavailable</span></li>';
@@ -528,6 +532,54 @@ async function loadNews(query, elId, maxItems = 6) {
 // âââââââââââââââââââââââââââââââââââââââââââââ
 // TRADINGVIEW CHARTS
 // âââââââââââââââââââââââââââââââââââââââââââââ
+// ─────────────────────────────────────────────
+// UK100 CHART (Chart.js + Capital.com candles)
+// ─────────────────────────────────────────────
+async function loadUK100Chart() {
+  var el = document.getElementById('uk100-canvas');
+  if (!el) return;
+  try {
+    var r = await fetch(BOT_URL + '/candles/UK100');
+    var d = await r.json();
+    var closes = d.closes || [];
+    if (!closes.length) return;
+    var labels = closes.map(function(_, i) { return i + 1; });
+    if (window._uk100Chart) window._uk100Chart.destroy();
+    window._uk100Chart = new Chart(el.getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'UK100',
+          data: closes,
+          borderColor: '#58a6ff',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: true,
+          backgroundColor: 'rgba(88,166,255,0.08)',
+          tension: 0.2
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { display: false },
+          y: {
+            ticks: { color: '#7d8590', font: { size: 10 }, maxTicksLimit: 5 },
+            grid: { color: 'rgba(33,38,45,0.8)' }
+          }
+        }
+      }
+    });
+  } catch(e) {
+    if (el && el.parentNode) {
+      el.parentNode.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:12px">Chart unavailable</div>';
+    }
+  }
+}
+
 function initCharts() {
   // UK100 uses Chart.js with live Capital.com candle data
   var uk100Canvas = document.createElement('canvas');
@@ -588,20 +640,4 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 </script>
 </body>
-</html>      var googleRss = 'https://news.google.com/rss/search?q=' + encodeURIComponent(query) + '&hl=en-GB&gl=GB&ceid=GB:en';
-      var resp = await fetch(RSS_PROXY + encodeURIComponent(googleRss));
-      var raw = await resp.json();
-      var parser = new DOMParser();
-      var xml = parser.parseFromString(raw.contents || '', 'application/xml');
-      var allItems = Array.from(xml.querySelectorAll('item')).slice(0, maxItems);
-      if (!allItems.length) { el.innerHTML = '<li class="news-item"><span style="color:var(--muted)">No news found</span></li>'; return; }
-      el.innerHTML = allItems.map(function(item) {
-        var title = (item.querySelector('title') || {}).textContent || '';
-        var guid  = (item.querySelector('guid')  || {}).textContent || '#';
-        var src   = (item.querySelector('source') || {}).textContent || '';
-        var pub   = (item.querySelector('pubDate') || {}).textContent || '';
-        var ago   = pub ? timeAgo(new Date(pub)) : '';
-        return '<li class="news-item"><a href="' + guid + '" target="_blank" rel="noopener noreferrer">' + title + '</a>' +
-               '<div class="news-meta">' + (src ? '<span class="news-source">' + src + '</span> &middot; ' : '') + ago + '</div></li>';
-      }).join('');
-      
+</html>
