@@ -312,7 +312,7 @@
 </main>
 
 <!-- ââ TRADINGVIEW CHARTS ââ -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2/dist/lightweight-charts.standalone.production.js"></script>
 <script src="https://s3.tradingview.com/tv.js"></script>
 <script>
 // âââââââââââââââââââââââââââââââââââââââââââââ
@@ -529,57 +529,59 @@ async function loadNews(query, elId, maxItems) {
 // UK100 CHART (Chart.js + Capital.com candles)
 // ─────────────────────────────────────────────
 async function loadUK100Chart() {
-  var el = document.getElementById('uk100-canvas');
-  if (!el) return;
+  var container = document.getElementById('chart-uk100');
+  if (!container) return;
   try {
     var r = await fetch(BOT_URL + '/candles/UK100');
     var d = await r.json();
-    var closes = d.closes || [];
-    if (!closes.length) return;
-    var labels = closes.map(function(_, i) { return i + 1; });
-    if (window._uk100Chart) window._uk100Chart.destroy();
-    window._uk100Chart = new Chart(el.getContext('2d'), {
-      type: 'line',
-      data: {
-        labels: labels,
-        datasets: [{
-          label: 'UK100',
-          data: closes,
-          borderColor: '#58a6ff',
-          borderWidth: 1.5,
-          pointRadius: 0,
-          fill: true,
-          backgroundColor: 'rgba(88,166,255,0.08)',
-          tension: 0.2
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { display: false },
-          y: {
-            ticks: { color: '#7d8590', font: { size: 10 }, maxTicksLimit: 5 },
-            grid: { color: 'rgba(33,38,45,0.8)' }
-          }
-        }
-      }
+    var candles = d.candles || [];
+    if (!candles.length) { container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:12px">No candle data</div>'; return; }
+
+    // Destroy previous instance
+    if (window._uk100Chart) { try { window._uk100Chart.remove(); } catch(e){} window._uk100Chart = null; }
+    container.innerHTML = '';
+
+    var chart = LightweightCharts.createChart(container, {
+      width:  container.clientWidth,
+      height: 220,
+      layout: { background: { type: 'solid', color: '#161b22' }, textColor: '#7d8590' },
+      grid:   { vertLines: { color: '#21262d' }, horzLines: { color: '#21262d' } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      rightPriceScale: { borderColor: '#21262d' },
+      timeScale: { borderColor: '#21262d', timeVisible: true, secondsVisible: false },
+      handleScroll: true,
+      handleScale:  true,
     });
+
+    var series = chart.addCandlestickSeries({
+      upColor:        '#3fb950',
+      downColor:      '#f85149',
+      borderUpColor:  '#3fb950',
+      borderDownColor:'#f85149',
+      wickUpColor:    '#3fb950',
+      wickDownColor:  '#f85149',
+    });
+
+    // Capital.com snapshotTime: "2026-03-29T10:00:00" — convert to UTC unix seconds
+    var data = candles.map(function(c) {
+      return { time: Math.floor(new Date(c.time + 'Z').getTime() / 1000), open: c.open, high: c.high, low: c.low, close: c.close };
+    }).filter(function(c) { return c.time > 0 && !isNaN(c.open); });
+    data.sort(function(a,b){ return a.time - b.time; });
+
+    series.setData(data);
+    chart.timeScale().fitContent();
+    window._uk100Chart = chart;
+
+    // Responsive: re-fit on resize
+    var ro = new ResizeObserver(function() { if (window._uk100Chart) window._uk100Chart.applyOptions({ width: container.clientWidth }); });
+    ro.observe(container);
   } catch(e) {
-    if (el && el.parentNode) {
-      el.parentNode.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:12px">Chart unavailable</div>';
-    }
+    var container = document.getElementById('chart-uk100');
+    if (container) container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:12px">Chart unavailable</div>';
   }
 }
 
 function initCharts() {
-  // UK100 uses Chart.js with live Capital.com candle data
-  var uk100Canvas = document.createElement('canvas');
-  uk100Canvas.id = 'uk100-canvas';
-  uk100Canvas.style.cssText = 'width:100%;height:100%;display:block';
-  document.getElementById('chart-uk100').appendChild(uk100Canvas);
-  window._uk100Chart = null;
   loadUK100Chart();
 
   new TradingView.widget({
@@ -615,7 +617,7 @@ async function loadAll() {
     loadPrice('UK100', 'uk100'),
       loadUK100Chart(),
     loadPrice('OIL_BRENT', 'brent'),
-    loadNews('FTSE 100 UK100 stock market', 'uk100-news'),
+    loadNews('FTSE 100', 'uk100-news'),
     loadNews('Brent crude oil price', 'brent-news'),
   ]);
   document.getElementById('last-updated').textContent =
