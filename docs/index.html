@@ -315,7 +315,7 @@
 <script>
 // âââââââââââââââââââââââââââââââââââââââââââââ
 const BOT_URL = 'https://trading-bot-production-2899.up.railway.app';
-const RSS_PROXY = 'https://api.rss2json.com/v1/api.json?rss_url=';
+const RSS_PROXY = 'https://api.allorigins.win/get?url=';
 
 // âââââââââââââââââââââââââââââââââââââââââââââ
 // UTILITIES
@@ -324,7 +324,7 @@ function fmt(n, dp = 2) {
   if (n == null || isNaN(n)) return 'â';
   return Number(n).toLocaleString('en-GB', { minimumFractionDigits: dp, maximumFractionDigits: dp });
 }
-function fmtCcy(n, ccy = 'Â£') {
+function fmtCcy(n, ccy = '£') {
   if (n == null || isNaN(n)) return 'â';
   const abs = Math.abs(n);
   return (n < 0 ? '-' : '') + ccy + fmt(abs);
@@ -381,7 +381,7 @@ async function loadAccount() {
     const pref = accounts.find(a => a.preferred) || accounts[0];
     if (!pref) return;
     const bal = pref.balance || {};
-    const ccy = pref.currency === 'USD' ? '$' : pref.currency === 'EUR' ? 'â¬' : 'Â£';
+    const ccy = pref.currency === 'USD' ? '$' : pref.currency === 'EUR' ? 'â¬' : '£';
     const avail = bal.available ?? 0;
     const equity = bal.balance ?? 0;
     const margin = bal.margin ?? 0;
@@ -529,7 +529,7 @@ async function loadNews(query, elId, maxItems = 6) {
 function initCharts() {
   new TradingView.widget({
     container_id: 'chart-uk100',
-    symbol: 'SPREADEX:UK100',
+    symbol: 'TVC:UKX',
     interval: '60',
     timezone: 'Europe/London',
     theme: 'dark',
@@ -596,4 +596,20 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 </script>
 </body>
-</html>
+</html>      var googleRss = 'https://news.google.com/rss/search?q=' + encodeURIComponent(query) + '&hl=en-GB&gl=GB&ceid=GB:en';
+      var resp = await fetch(RSS_PROXY + encodeURIComponent(googleRss));
+      var raw = await resp.json();
+      var parser = new DOMParser();
+      var xml = parser.parseFromString(raw.contents || '', 'application/xml');
+      var allItems = Array.from(xml.querySelectorAll('item')).slice(0, maxItems);
+      if (!allItems.length) { el.innerHTML = '<li class="news-item"><span style="color:var(--muted)">No news found</span></li>'; return; }
+      el.innerHTML = allItems.map(function(item) {
+        var title = (item.querySelector('title') || {}).textContent || '';
+        var guid  = (item.querySelector('guid')  || {}).textContent || '#';
+        var src   = (item.querySelector('source') || {}).textContent || '';
+        var pub   = (item.querySelector('pubDate') || {}).textContent || '';
+        var ago   = pub ? timeAgo(new Date(pub)) : '';
+        return '<li class="news-item"><a href="' + guid + '" target="_blank" rel="noopener noreferrer">' + title + '</a>' +
+               '<div class="news-meta">' + (src ? '<span class="news-source">' + src + '</span> &middot; ' : '') + ago + '</div></li>';
+      }).join('');
+      
