@@ -846,13 +846,27 @@ async def get_market_price(epic: str):
 
 @app.get("/candles/{epic}")
 async def candles_endpoint(epic: str):
-    """Return OHLCV candle data for the dashboard chart."""
+    """Return OHLCV candle data with timestamps for the dashboard candlestick chart."""
     try:
-        opens, highs, lows, closes = await fetch_candles(epic.upper())
-        return {"epic": epic.upper(), "resolution": CANDLE_RES,
-                "opens": opens, "highs": highs, "lows": lows, "closes": closes}
+        cst, token = await _capital_auth()
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.get(
+                f"{CAPITAL_BASE}/api/v1/prices/{epic.upper()}",
+                params={"resolution": CANDLE_RES, "max": CANDLE_COUNT},
+                headers=_cap_headers(cst, token),
+            )
+        prices = r.json().get("prices", [])
+        candles = [{
+            "time":  p.get("snapshotTime", ""),
+            "open":  round((p["openPrice"]["bid"]  + p["openPrice"]["ask"])  / 2, 2),
+            "high":  round(max(p["highPrice"]["bid"],  p["highPrice"]["ask"]), 2),
+            "low":   round(min(p["lowPrice"]["bid"],   p["lowPrice"]["ask"]), 2),
+            "close": round((p["closePrice"]["bid"] + p["closePrice"]["ask"]) / 2, 2),
+        } for p in prices]
+        return {"epic": epic.upper(), "resolution": CANDLE_RES, "candles": candles}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/news")
 async def news_endpoint(q: str = "FTSE 100", limit: int = 6):
