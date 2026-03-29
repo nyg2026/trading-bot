@@ -34,7 +34,7 @@ LEVERAGE         = float(os.getenv("LEVERAGE", "1"))          # broker leverage 
 TP_PCT           = float(os.getenv("TP_PCT", "0.15"))         # take-profit % from entry (0 = disabled)
 SL_PCT           = float(os.getenv("SL_PCT", "0.075"))        # stop-loss % from entry   (0 = disabled)
 WEBHOOK_SECRET   = os.getenv("WEBHOOK_SECRET", "")
-ALLOWED_SYMBOLS  = set(s.strip().upper() for s in os.getenv("ALLOWED_SYMBOLS", "UK100,BRTOIL").split(",") if s.strip())
+ALLOWED_SYMBOLS  = set(s.strip().upper() for s in os.getenv("ALLOWED_SYMBOLS", "UK100,OIL_BRENT").split(",") if s.strip())
 
 # Bybit
 BYBIT_API_KEY    = os.getenv("BYBIT_API_KEY", "")
@@ -335,6 +335,36 @@ async def search_markets(q: str = "brent"):
             params={"searchTerm": q, "limit": 10},
             headers=_cap_headers(cst, token),
         )
+    return r.json()
+
+@app.get("/account")
+async def get_account():
+    """Account balance, equity, margin and P&L from Capital.com."""
+    if EXCHANGE != "CAPITAL":
+        return {"error": "only available when EXCHANGE=CAPITAL"}
+    cst, token = await _capital_auth()
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.get(f"{CAPITAL_BASE}/api/v1/accounts", headers=_cap_headers(cst, token))
+    return r.json()
+
+@app.get("/positions")
+async def get_positions():
+    """All open positions with entry price, direction, size and live P&L."""
+    if EXCHANGE != "CAPITAL":
+        return {"error": "only available when EXCHANGE=CAPITAL"}
+    cst, token = await _capital_auth()
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.get(f"{CAPITAL_BASE}/api/v1/positions", headers=_cap_headers(cst, token))
+    return r.json()
+
+@app.get("/price/{epic}")
+async def get_market_price(epic: str):
+    """Live bid/offer/change for any Capital.com epic (e.g. UK100, OIL_BRENT)."""
+    if EXCHANGE != "CAPITAL":
+        return {"error": "only available when EXCHANGE=CAPITAL"}
+    cst, token = await _capital_auth()
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(f"{CAPITAL_BASE}/api/v1/markets/{epic.upper()}", headers=_cap_headers(cst, token))
     return r.json()
 
 @app.post("/webhook", dependencies=[Depends(verify_secret)])
