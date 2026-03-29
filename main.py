@@ -854,6 +854,31 @@ async def candles_endpoint(epic: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/news")
+async def news_endpoint(q: str = "FTSE 100", limit: int = 6):
+    """Fetch Google News RSS server-side and return parsed articles for the dashboard."""
+    import xml.etree.ElementTree as ET
+    try:
+        url = f"https://news.google.com/rss/search?q={q}&hl=en-GB&gl=GB&ceid=GB:en"
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
+            r = await c.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; TradingBot/2.0)"})
+        root = ET.fromstring(r.text)
+        items = []
+        for item in root.findall('./channel/item')[:limit]:
+            def _t(tag):
+                el = item.find(tag)
+                return el.text or '' if el is not None else ''
+            items.append({
+                "title":   _t('title'),
+                "link":    _t('guid') or _t('link'),
+                "source":  _t('source'),
+                "pubDate": _t('pubDate'),
+            })
+        return {"items": items}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/markets")
 async def search_markets(q: str = "brent"):
     if EXCHANGE != "CAPITAL": return {"error": "only available when EXCHANGE=CAPITAL"}
