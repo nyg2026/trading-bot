@@ -505,24 +505,17 @@ async function loadNews(query, elId, maxItems) {
   maxItems = maxItems || 6;
   var el = document.getElementById(elId);
   try {
-    var googleRss = 'https://news.google.com/rss/search?q=' + encodeURIComponent(query) + '&hl=en-GB&gl=GB&ceid=GB:en';
-    var resp = await fetch(RSS_PROXY + encodeURIComponent(googleRss));
-    var raw = await resp.json();
-    var parser = new DOMParser();
-    var xml = parser.parseFromString(raw.contents || '', 'application/xml');
-    var allItems = Array.from(xml.querySelectorAll('item')).slice(0, maxItems);
-    if (!allItems.length) {
+    var r = await fetch(BOT_URL + '/news?q=' + encodeURIComponent(query) + '&limit=' + maxItems);
+    var d = await r.json();
+    var items = d.items || [];
+    if (!items.length) {
       el.innerHTML = '<li class="news-item"><span style="color:var(--muted)">No news found</span></li>';
       return;
     }
-    el.innerHTML = allItems.map(function(item) {
-      var title = (item.querySelector('title') || {}).textContent || '';
-      var guid  = (item.querySelector('guid')  || {}).textContent || '#';
-      var src   = (item.querySelector('source') || {}).textContent || '';
-      var pub   = (item.querySelector('pubDate') || {}).textContent || '';
-      var ago   = pub ? timeAgo(new Date(pub)) : '';
-      return '<li class="news-item"><a href="' + guid + '" target="_blank" rel="noopener noreferrer">' + title + '</a>' +
-        '<div class="news-meta">' + (src ? '<span class="news-source">' + src + '</span> &middot; ' : '') + ago + '</div></li>';
+    el.innerHTML = items.map(function(item) {
+      var ago = item.pubDate ? timeAgo(new Date(item.pubDate)) : '';
+      return '<li class="news-item"><a href="' + item.link + '" target="_blank" rel="noopener noreferrer">' + item.title + '</a>' +
+        '<div class="news-meta">' + (item.source ? '<span class="news-source">' + item.source + '</span> &middot; ' : '') + ago + '</div></li>';
     }).join('');
   } catch (e) {
     el.innerHTML = '<li class="news-item"><span style="color:var(--muted)">News unavailable</span></li>';
