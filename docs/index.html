@@ -29,7 +29,41 @@
   }
 
   /* ââ HEADER ââ */
-  header {
+  /* ── INDICATORS ── */
+  .indic-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .indic-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--border);
+    font-weight: 600; font-size: 14px;
+  }
+  .score-pill {
+    font-size: 13px; font-weight: 700; padding: 2px 10px; border-radius: 20px;
+    border: 2px solid; display: inline-flex; align-items: center; gap: 5px;
+  }
+  .score-pill.buy  { color: var(--green); border-color: var(--green); background: rgba(63,185,80,.1); }
+  .score-pill.sell { color: var(--red);   border-color: var(--red);   background: rgba(248,81,73,.1); }
+  .score-pill.neutral { color: var(--muted); border-color: var(--muted); background: transparent; }
+  .indic-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 0; border-bottom: 1px solid rgba(33,38,45,.6); gap: 8px;
+  }
+  .indic-row:last-child { border-bottom: none; }
+  .indic-name { color: var(--muted); font-size: 12px; min-width: 90px; text-transform: uppercase; letter-spacing: .4px; }
+  .indic-val { font-size: 12px; font-weight: 500; text-align: right; }
+  .indic-val.buy    { color: var(--green); }
+  .indic-val.sell   { color: var(--red); }
+  .indic-val.neutral{ color: var(--yellow); }
+  .indic-icon { font-size: 11px; margin-right: 3px; }
+  .would-trade-badge {
+    font-size: 11px; padding: 1px 8px; border-radius: 10px; font-weight: 600; margin-left: 8px;
+  }
+  .would-trade-badge.yes { background: rgba(63,185,80,.15); color: var(--green); }
+  .would-trade-badge.no  { background: rgba(125,133,144,.1); color: var(--muted); }
+
+  /* ── HEADER ── */
+
+
+  header {  header {
     background: var(--card);
     border-bottom: 1px solid var(--border);
     padding: 14px 24px;
@@ -274,6 +308,30 @@
     <div class="section-title">Open Positions <span class="count" id="pos-count">0</span></div>
     <div id="positions-container">
       <div class="empty-state">Loading positionsâ¦</div>
+    </div>
+  </div>
+
+  <!-- LIVE SIGNAL INDICATORS -->
+  <div class="card" style="margin-bottom:20px;">
+    <div class="section-title" style="display:flex;align-items:center;justify-content:space-between;">
+      <span>📊 Live Signal Indicators</span>
+      <span style="font-size:11px;color:var(--muted);font-weight:400;" id="indic-updated">—</span>
+    </div>
+    <div class="indic-grid">
+      <div>
+        <div class="indic-header">
+          <span>🇬🇧 UK100 &nbsp;<span id="uk100-score-pill" class="score-pill neutral">—/7</span><span id="uk100-trade-badge" class="would-trade-badge"></span></span>
+          <span style="font-size:12px;color:var(--muted);" id="uk100-indic-price">—</span>
+        </div>
+        <div id="uk100-indic-rows"><div style="color:var(--muted);padding:10px 0;">Loading…</div></div>
+      </div>
+      <div>
+        <div class="indic-header">
+          <span>🛢️ Brent &nbsp;<span id="brent-score-pill" class="score-pill neutral">—/7</span><span id="brent-trade-badge" class="would-trade-badge"></span></span>
+          <span style="font-size:12px;color:var(--muted);" id="brent-indic-price">—</span>
+        </div>
+        <div id="brent-indic-rows"><div style="color:var(--muted);padding:10px 0;">Loading…</div></div>
+      </div>
     </div>
   </div>
 
@@ -605,6 +663,40 @@ function initCharts() {
 }
 
 // âââââââââââââââââââââââââââââââââââââââââââââ
+const INDICATOR_LABELS = {
+  ema_cross: 'EMA 9/21', rsi: 'RSI', macd: 'MACD',
+  bbands: 'Bollinger', atr: 'ATR', stoch: 'Stochastic', adx: 'ADX',
+};
+function renderIndicatorRows(sigMap) {
+  return Object.entries(sigMap).map(([key, val]) => {
+    const label = INDICATOR_LABELS[key] || key;
+    const v = String(val);
+    const isBuy = v.startsWith('BUY'), isSell = v.startsWith('SELL');
+    const cls = isBuy ? 'buy' : isSell ? 'sell' : 'neutral';
+    const icon = isBuy ? '▲' : isSell ? '▼' : '●';
+    return '<div class="indic-row"><span class="indic-name">'+label+'</span><span class="indic-val '+cls+'"><span class="indic-icon">'+icon+'</span>'+v+'</span></div>';
+  }).join('');
+}
+async function loadSignals() {
+  try {
+    const r = await fetch(BOT_URL + '/signals');
+    const d = await r.json();
+    ['UK100','OIL_BRENT'].forEach(epic => {
+      const pfx = epic === 'UK100' ? 'uk100' : 'brent';
+      const data = d.signals && d.signals[epic]; if (!data) return;
+      const pill = document.getElementById(pfx+'-score-pill');
+      pill.textContent = data.score+'/7';
+      pill.className = 'score-pill '+(data.direction==='BUY'?'buy':data.direction==='SELL'?'sell':'neutral');
+      const badge = document.getElementById(pfx+'-trade-badge');
+      badge.textContent = data.would_trade ? '⚡ WOULD TRADE' : 'waiting';
+      badge.className = 'would-trade-badge '+(data.would_trade?'yes':'no');
+      document.getElementById(pfx+'-indic-price').textContent = data.price ? data.price.toLocaleString() : '—';
+      document.getElementById(pfx+'-indic-rows').innerHTML = renderIndicatorRows(data.signals||{});
+    });
+    document.getElementById('indic-updated').textContent = 'Updated '+new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  } catch(e) { console.error('loadSignals', e); }
+}
+
 // LOAD ALL
 // âââââââââââââââââââââââââââââââââââââââââââââ
 let refreshTimer;
@@ -614,6 +706,7 @@ async function loadAll() {
     loadHealth(),
     loadAccount(),
     loadPositions(),
+    loadSignals(),
     loadPrice('UK100', 'uk100'),
       loadUK100Chart(),
     loadPrice('OIL_BRENT', 'brent'),
