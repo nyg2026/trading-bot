@@ -839,6 +839,7 @@ def verify_secret(x_webhook_secret: str | None = Header(default=None)):
 
 @app.get("/health")
 async def health():
+    _default_leverage = int(max(LEVERAGE_MAP.values()))
     return {
         "status":           "ok",
         "mode":             "PAPER" if PAPER_TRADE else "LIVE",
@@ -856,6 +857,14 @@ async def health():
         "symbols":          sorted(ALLOWED_SYMBOLS),
         "open_live_trades": trade_mgr.count(),
         "open_paper_trades": len(_paper_open),
+        # Dashboard-compatible aliases
+        "exchange":         "Capital.com",
+        "tp_pct":           ATR_TP_MULT,
+        "sl_pct":           ATR_SL_MULT,
+        "leverage":         int(os.getenv("LEVERAGE", str(_default_leverage))),
+        "max_trades":       MAX_OPEN_TRADES,
+        "allowed_symbols":  sorted(ALLOWED_SYMBOLS),
+        "open_trades":      trade_mgr.count(),
     }
 
 
