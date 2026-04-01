@@ -62,7 +62,7 @@ LEVERAGE_MAP      = {**_LEVERAGE_DEFAULTS,
 # Risk management
 RISK_PCT          = float(os.getenv("RISK_PCT", "2.0"))      # % of risk capital per trade
 ATR_SL_MULT       = float(os.getenv("ATR_SL_MULT", "1.0"))  # SL = ATR_SL_MULT x ATR
-ATR_TP_MULT       = float(os.getenv("ATR_TP_MULT", "2.0"))  # TP = ATR_TP_MULT x ATR
+ATR_TP_MULT       = float(os.getenv("ATR_TP_MULT", "0.25"))  # TP = ATR_TP_MULT x ATR
 DEFAULT_QTY       = float(os.getenv("DEFAULT_QTY", "0.1"))  # fallback minimum lot size
 
 # Profit protection: never risk profits, only original capital
