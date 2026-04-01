@@ -146,16 +146,9 @@
   .empty-s{padding:18px;text-align:center;color:var(--muted);font-size:12px;}
 
   /* ══ BOTTOM ROW ═══════════════════════════════════════════════════════════ */
-  .bottom-row{grid-area:bottom;display:grid;grid-template-columns:1fr 1fr 260px;gap:10px;}
-  .news-card,.cfg-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:11px 13px;overflow:hidden;}
+  .bottom-row{grid-area:bottom;display:grid;grid-template-columns:1fr;gap:10px;}
+  .cfg-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:11px 13px;overflow:hidden;}
   .card-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);margin-bottom:7px;}
-  .news-list{list-style:none;}
-  .ni{padding:5px 0;border-bottom:1px solid rgba(26,45,69,.4);}
-  .ni:last-child{border-bottom:none;}
-  .ni a{color:var(--text);text-decoration:none;font-size:11.5px;line-height:1.35;display:block;}
-  .ni a:hover{color:var(--blue);}
-  .ni-meta{font-size:10px;color:var(--muted);margin-top:1px;}
-  .ni-src{color:var(--cyan);}
   /* config */
   .cfg-grid{display:grid;grid-template-columns:1fr 1fr;gap:0;}
   .cfg-row{display:flex;justify-content:space-between;align-items:center;padding:4.5px 0;border-bottom:1px solid rgba(26,45,69,.4);}
@@ -289,14 +282,6 @@
 
   <!-- ── BOTTOM: News + Config ── -->
   <div class="bottom-row">
-    <div class="news-card">
-      <div class="card-lbl">📰 UK100 / FTSE 100</div>
-      <ul class="news-list" id="uk100-news"><li class="ni"><div class="skel"></div></li></ul>
-    </div>
-    <div class="news-card">
-      <div class="card-lbl">📰 Brent Crude</div>
-      <ul class="news-list" id="brent-news"><li class="ni"><div class="skel"></div></li></ul>
-    </div>
     <div class="cfg-card">
       <div class="card-lbl">⚙️ Bot Config</div>
       <div class="cfg-grid">
@@ -317,7 +302,6 @@
 <script src="https://s3.tradingview.com/tv.js"></script>
 <script>
 const BOT_URL = 'https://trading-bot-production-2899.up.railway.app';
-const RSS_PROXY = 'https://api.rss2json.com/v1/api.json?rss_url=';
 
 function fmt(n,dp=2){if(n==null||isNaN(n))return'—';return Number(n).toLocaleString('en-GB',{minimumFractionDigits:dp,maximumFractionDigits:dp});}
 function fmtCcy(n,ccy='£'){if(n==null||isNaN(n))return'—';return(n<0?'-':'')+ccy+fmt(Math.abs(n));}
@@ -466,24 +450,11 @@ async function loadSignals(){
 }
 
 // ── NEWS ──
-async function loadNews(query,elId,max=4){
-  const el=document.getElementById(elId);
-  try{
-    const url=encodeURIComponent(`https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-GB&gl=GB&ceid=GB:en`);
-    const d=await fetch(`${RSS_PROXY}${url}&count=${max}`).then(r=>r.json());
-    const items=(d.items||[]).slice(0,max);
-    if(!items.length){el.innerHTML='<li class="ni"><span style="color:var(--muted)">No news</span></li>';return;}
-    el.innerHTML=items.map(item=>{
-      const src=item.author||item.source?.name||'';
-      return`<li class="ni"><a href="${item.link}" target="_blank" rel="noopener noreferrer">${item.title}</a><div class="ni-meta">${src?`<span class="ni-src">${src}</span> · `:''}${item.pubDate?ago(item.pubDate):''}</div></li>`;
-    }).join('');
-  }catch(e){el.innerHTML='<li class="ni"><span style="color:var(--muted)">Unavailable</span></li>';}
-}
 
 // ── CHARTS ──
 function initCharts(){
   const base={interval:'60',timezone:'Europe/London',theme:'dark',style:'1',locale:'en',toolbar_bg:'#111927',enable_publishing:false,hide_top_toolbar:true,hide_legend:false,save_image:false,height:155,width:'100%',backgroundColor:'#111927',gridColor:'rgba(26,45,69,.7)'};
-  new TradingView.widget({...base,container_id:'chart-uk100',symbol:'SPREADEX:UK100'});
+  new TradingView.widget({...base,container_id:'chart-uk100',symbol:'TVC:UKX'});
   new TradingView.widget({...base,container_id:'chart-brent',symbol:'TVC:UKOIL'});
 }
 
@@ -494,8 +465,6 @@ async function loadAll(){
   await Promise.allSettled([
     loadHealth(),loadAccount(),loadPositions(),loadSignals(),
     loadPrice('UK100','uk100'),loadPrice('OIL_BRENT','brent'),
-    loadNews('FTSE 100 UK100 stock market','uk100-news'),
-    loadNews('Brent crude oil price','brent-news'),
   ]);
   _t=setTimeout(loadAll,60000);
 }
