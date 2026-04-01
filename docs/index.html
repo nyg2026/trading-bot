@@ -108,7 +108,7 @@
 
   /* 7-segment score bar */
   .score-bar{display:flex;gap:3px;margin-bottom:8px;}
-  .s-seg{height:3px;flex:1;border-radius:.px;background:var(--border);transition:background .3s;}
+  .s-seg{height:3px;flex:1;border-radius:2px;background:var(--border);transition:background .3s;}
   .s-seg.buy{background:var(--green);}
   .s-seg.sell{background:var(--red);}
 
@@ -302,7 +302,7 @@
       <div class="cfg-grid">
         <div class="cfg-row"><span class="cfg-k">Exchange</span><span class="cfg-v" id="cfg-exchange">—</span></div>
         <div class="cfg-row"><span class="cfg-k">Mode</span><span class="cfg-v" id="cfg-mode">—</span></div>
-        <div class="cfg-row"><span class="cfg-k">TP Mult</span><span class="cfg-v  green" id="cfg-tp">—</span></div>
+        <div class="cfg-row"><span class="cfg-k">TP Mult</span><span class="cfg-v green" id="cfg-tp">—</span></div>
         <div class="cfg-row"><span class="cfg-k">SL Mult</span><span class="cfg-v red" id="cfg-sl">—</span></div>
         <div class="cfg-row"><span class="cfg-k">Risk %</span><span class="cfg-v" id="cfg-risk">—</span></div>
         <div class="cfg-row"><span class="cfg-k">Leverage</span><span class="cfg-v" id="cfg-leverage">—</span></div>
@@ -317,7 +317,7 @@
 <script src="https://s3.tradingview.com/tv.js"></script>
 <script>
 const BOT_URL = 'https://trading-bot-production-2899.up.railway.app';
-const RSS_PROXY = 'https://api.rss2son.com/v1/api.json?rss_url=';
+const RSS_PROXY = 'https://api.rss2json.com/v1/api.json?rss_url=';
 
 function fmt(n,dp=2){if(n==null||isNaN(n))return'—';return Number(n).toLocaleString('en-GB',{minimumFractionDigits:dp,maximumFractionDigits:dp});}
 function fmtCcy(n,ccy='£'){if(n==null||isNaN(n))return'—';return(n<0?'-':'')+ccy+fmt(Math.abs(n));}
@@ -391,7 +391,7 @@ async function loadPositions(){
       return`<tr>
         <td class="nm"><strong>${mkt.instrumentName||mkt.epic||'—'}</strong> <span style="color:var(--muted);font-size:10px">${mkt.epic||''}</span></td>
         <td><span class="dir-b ${dir.toLowerCase()}">${dir}</span></td>
-        <td>${fmt(entry) }</td><td>${fmt(cur)}</td><td>${fmt(size)}</td>
+        <td>${fmt(entry)}</td><td>${fmt(cur)}</td><td>${fmt(size)}</td>
         <td style="color:var(--${pc||'text'});font-weight:700">${fmtCcy(raw)}</td>
         <td style="color:var(--${pc||'text'})">${pct}%</td>
         <td style="color:var(--red)">${fmt(sl)}</td>
@@ -399,11 +399,11 @@ async function loadPositions(){
         <td><span class="mkt-status ${mkt.marketStatus==='TRADEABLE'?'open':'closed'}">${mkt.marketStatus||'—'}</span></td>
       </tr>`;
     });
-    cont.innerHTML<`<table><thead><tr>
+    cont.innerHTML=`<table><thead><tr>
       <th>Instrument</th><th>Dir</th><th>Entry</th><th>Current</th>
       <th>Size</th><th>P&L</th><th>P&L%</th><th>Stop Loss</th><th>Take Profit</th><th>Status</th>
     </tr></thead><tbody>${rows.join('')}</tbody></table>`;
-  }catch(e){cont.innerHTML='<div class="empty-s">Could not load positions</div>;}
+  }catch(e){cont.innerHTML='<div class="empty-s">Could not load positions</div>';}
 }
 
 // ── PRICE ──
