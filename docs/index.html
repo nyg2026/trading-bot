@@ -127,8 +127,19 @@
   .i-val.neutral{color:var(--muted);}
 
   /* mini chart */
-  .chart-wrap{flex:1;min-height:155px;}
-  .tradingview-widget-container{height:155px!important;}
+  /* ══ TRADES ════════════════════════════════════════ */
+  .trades-wrap{padding:10px 14px 14px;}
+  .trades-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+  .trades-hdr span{font-size:11px;font-weight:600;letter-spacing:.6px;color:var(--muted);text-transform:uppercase;}
+  .export-btn{font-size:11px;padding:3px 8px;background:var(--card2);border:1px solid var(--border);color:var(--text);border-radius:4px;cursor:pointer;}
+  .export-btn:hover{background:var(--border2);}
+  .trades-tbl{width:100%;border-collapse:collapse;font-size:12px;}
+  .trades-tbl th{text-align:left;color:var(--muted);font-weight:500;padding:4px 6px;border-bottom:1px solid var(--border);}
+  .trades-tbl td{padding:4px 6px;border-bottom:1px solid rgba(26,45,69,.5);}
+  .trades-tbl tr.total-row td{border-top:1px solid var(--border);border-bottom:none;font-weight:600;padding-top:6px;}
+  .trades-summary{display:flex;gap:14px;margin-top:8px;font-size:12px;color:var(--muted);}
+  .trades-summary span b{color:var(--text);}
+  .no-trades{color:var(--muted);font-size:12px;text-align:center;padding:16px 0;}
 
   /* ══ POSITIONS ════════════════════════════════════════════════════════════ */
   .pos-row{grid-area:pos;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;}
@@ -233,7 +244,15 @@
         <div class="irow"><span class="i-dot neutral"></span><span class="i-name">Loading</span><span class="i-val neutral">…</span></div>
       </div>
     </div>
-    <div class="chart-wrap"><div class="tradingview-widget-container" id="chart-uk100"></div></div>
+    <div class="trades-wrap">
+    <div class="trades-hdr"><span>Today's Trades</span><button class="export-btn" onclick="exportCSV('uk100')">&#x2B07; Export CSV</button></div>
+    <table class="trades-tbl" id="trades-tbl-uk100">
+      <thead><tr><th>#</th><th>Position</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Reason</th></tr></thead>
+      <tbody id="trades-body-uk100"><tr><td colspan="6" class="no-trades">No trades today</td></tr></tbody>
+      <tfoot id="trades-foot-uk100"></tfoot>
+    </table>
+    <div class="trades-summary" id="trades-summary-uk100"></div>
+  </div>
   </div>
 
   <!-- ── BRENT ── -->
@@ -271,7 +290,15 @@
         <div class="irow"><span class="i-dot neutral"></span><span class="i-name">Loading</span><span class="i-val neutral">…</span></div>
       </div>
     </div>
-    <div class="chart-wrap"><div class="tradingview-widget-container" id="chart-brent"></div></div>
+    <div class="trades-wrap">
+    <div class="trades-hdr"><span>Today's Trades</span><button class="export-btn" onclick="exportCSV('brent')">&#x2B07; Export CSV</button></div>
+    <table class="trades-tbl" id="trades-tbl-brent">
+      <thead><tr><th>#</th><th>Position</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Reason</th></tr></thead>
+      <tbody id="trades-body-brent"><tr><td colspan="6" class="no-trades">No trades today</td></tr></tbody>
+      <tfoot id="trades-foot-brent"></tfoot>
+    </table>
+    <div class="trades-summary" id="trades-summary-brent"></div>
+  </div>
   </div>
 
   <!-- ── OPEN POSITIONS ── -->
@@ -299,7 +326,6 @@
 
 </main>
 
-<script src="https://s3.tradingview.com/tv.js"></script>
 <script>
 const BOT_URL = 'https://trading-bot-production-2899.up.railway.app';
 
@@ -451,25 +477,74 @@ async function loadSignals(){
 
 // ── NEWS ──
 
-// ── CHARTS ──
-function initCharts(){
-  const base={interval:'60',timezone:'Europe/London',theme:'dark',style:'1',locale:'en',toolbar_bg:'#111927',enable_publishing:false,hide_top_toolbar:true,hide_legend:false,save_image:false,height:155,width:'100%',backgroundColor:'#111927',gridColor:'rgba(26,45,69,.7)'};
-  new TradingView.widget({...base,container_id:'chart-uk100',symbol:'TVC:UKX'});
-  new TradingView.widget({...base,container_id:'chart-brent',symbol:'TVC:UKOIL'});
-}
 
 // ── LOAD ALL ──
 let _t;
+// ── TRADES ──
+async function loadTrades(){
+  try{
+    const r=await fetch(BOT_URL+'/paper_trades');
+    const d=await r.json();
+    const history=d.history||[];
+    ['UK100','OIL_BRENT'].forEach(sym=>{
+      const key=sym==='UK100'?'uk100':'brent';
+      const trades=history.filter(t=>t.symbol===sym);
+      const tbody=document.getElementById('trades-body-'+key);
+      const tfoot=document.getElementById('trades-foot-'+key);
+      const sumEl=document.getElementById('trades-summary-'+key);
+      if(!tbody)return;
+      if(trades.length===0){
+        tbody.innerHTML='<tr><td colspan="6" class="no-trades">No trades today</td></tr>';
+        tfoot.innerHTML='';
+        sumEl.innerHTML='';
+        return;
+      }
+      tbody.innerHTML=trades.map((t,i)=>{
+        const dir=t.direction==='LONG'?'<span class="green">LONG</span>':'<span class="red">SHORT</span>';
+        const pnl=t.pnl!=null?(t.pnl>=0?'<span class="green">':'<span class="red">')+( t.pnl>=0?'+':'')+t.pnl.toFixed(2)+'</span>':'&#x2013;';
+        const entry=t.entry!=null?t.entry.toFixed(2):'&#x2013;';
+        const exit=t.close_price!=null?t.close_price.toFixed(2):'&#x2013;';
+        return '<tr><td>'+(i+1)+'</td><td>'+dir+'</td><td>'+entry+'</td><td>'+exit+'</td><td>'+pnl+'</td><td>'+(t.close_reason||'&#x2013;')+'</td></tr>';
+      }).join('');
+      const closed=trades.filter(t=>t.pnl!=null);
+      const totalPnl=closed.reduce((s,t)=>s+t.pnl,0);
+      const wins=closed.filter(t=>t.pnl>0).length;
+      const winPct=closed.length?Math.round(wins/closed.length*100):0;
+      tfoot.innerHTML='<tr class="total-row"><td></td><td>Total P&amp;L</td><td></td><td></td><td class="'+(totalPnl>=0?'green':'red')+'">'+( totalPnl>=0?'+':'')+totalPnl.toFixed(2)+'</td><td></td></tr>';
+      sumEl.innerHTML='<span>Trades: <b>'+trades.length+'</b></span><span>Wins: <b>'+wins+'</b></span><span>Win %: <b>'+(closed.length?winPct+'%':'&#x2013;')+'</b></span>';
+    });
+  }catch(e){console.warn('trades err',e);}
+}
+
+function exportCSV(key){
+  const label=key==='uk100'?'UK100':'Brent';
+  const tbl=document.getElementById('trades-tbl-'+key);
+  if(!tbl)return;
+  const rows=[['#','Position','Entry','Exit','PnL','Reason']];
+  tbl.querySelectorAll('tbody tr').forEach(tr=>{
+    const cells=tr.querySelectorAll('td');
+    if(cells.length>1)rows.push(Array.from(cells).map(td=>td.innerText.trim()));
+  });
+  const foot=tbl.querySelector('tfoot tr');
+  if(foot){const cells=foot.querySelectorAll('td');rows.push(Array.from(cells).map(td=>td.innerText.trim()));}
+  const csv=rows.map(r=>r.join(',')).join('\n');
+  const a=document.createElement('a');
+  a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
+  a.download=label+'_trades_'+new Date().toISOString().slice(0,10)+'.csv';
+  a.click();
+}
+
 async function loadAll(){
   clearTimeout(_t);
   await Promise.allSettled([
     loadHealth(),loadAccount(),loadPositions(),loadSignals(),
     loadPrice('UK100','uk100'),loadPrice('OIL_BRENT','brent'),
+    loadTrades(),
   ]);
   _t=setTimeout(loadAll,60000);
 }
 
-document.addEventListener('DOMContentLoaded',()=>{initCharts();loadAll();});
+document.addEventListener('DOMContentLoaded',()=>{loadAll();});
 </script>
 </body>
 </html>
