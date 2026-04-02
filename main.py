@@ -1012,12 +1012,12 @@ async def get_trades():
     """Today's closed trades from Capital.com transaction history."""
     cst, token = await _capital_auth()
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    from_ms = int(today_start.timestamp() * 1000)
-    to_ms   = int(datetime.now(timezone.utc).timestamp() * 1000)
+    from_str = today_start.strftime('%Y-%m-%dT%H:%M:%S')
+    to_str   = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.get(
             f"{CAPITAL_BASE}/api/v1/history/transactions",
-            params={"type": "TRADE_RESULT", "from": from_ms, "to": to_ms, "maxResults": 50},
+            params={"type": "TRADE_RESULT", "from": from_str, "to": to_str, "maxResults": 50},
             headers=_cap_headers(cst, token),
         )
     return r.json()
