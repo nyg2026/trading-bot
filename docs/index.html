@@ -483,39 +483,39 @@ let _t;
 // ── TRADES ──
 async function loadTrades(){
   try{
-    const r=await fetch(BOT_URL+'/paper_trades');
+    const r=await fetch(BOT_URL+'/trades');
     const d=await r.json();
-    const history=d.history||[];
-    ['UK100','OIL_BRENT'].forEach(sym=>{
-      const key=sym==='UK100'?'uk100':'brent';
-      const trades=history.filter(t=>t.symbol===sym);
+    const transactions=d.transactions||[];
+    const syms={UK100:'uk100',OIL_BRENT:'brent'};
+    Object.entries(syms).forEach(([sym,key])=>{
+      const trades=transactions.filter(t=>t.epic===sym);
       const tbody=document.getElementById('trades-body-'+key);
       const tfoot=document.getElementById('trades-foot-'+key);
       const sumEl=document.getElementById('trades-summary-'+key);
       if(!tbody)return;
-      if(trades.length===0){
+      if(!trades.length){
         tbody.innerHTML='<tr><td colspan="6" class="no-trades">No trades today</td></tr>';
-        tfoot.innerHTML='';
-        sumEl.innerHTML='';
-        return;
+        tfoot.innerHTML='';sumEl.innerHTML='';return;
       }
       tbody.innerHTML=trades.map((t,i)=>{
-        const dir=t.direction==='LONG'?'<span class="green">LONG</span>':'<span class="red">SHORT</span>';
-        const pnl=t.pnl!=null?(t.pnl>=0?'<span class="green">':'<span class="red">')+( t.pnl>=0?'+':'')+t.pnl.toFixed(2)+'</span>':'&#x2013;';
-        const entry=t.entry!=null?t.entry.toFixed(2):'&#x2013;';
-        const exit=t.close_price!=null?t.close_price.toFixed(2):'&#x2013;';
-        return '<tr><td>'+(i+1)+'</td><td>'+dir+'</td><td>'+entry+'</td><td>'+exit+'</td><td>'+pnl+'</td><td>'+(t.close_reason||'&#x2013;')+'</td></tr>';
+        const isBuy=(t.direction||'').toUpperCase()==='BUY';
+        const dir=isBuy?'<span class="green">LONG</span>':'<span class="red">SHORT</span>';
+        const entry=parseFloat(t.openLevel)||0;
+        const exit=parseFloat(t.closeLevel)||0;
+        const pnlRaw=String(t.profitAndLoss||'0').replace(/[\u00a3$\u20ac,]/g,'');
+        const pnl=parseFloat(pnlRaw)||0;
+        const pnlStr=(pnl>=0?'<span class="green">+':'<span class="red">')+pnl.toFixed(2)+'</span>';
+        return '<tr><td>'+(i+1)+'</td><td>'+dir+'</td><td>'+entry.toFixed(2)+'</td><td>'+exit.toFixed(2)+'</td><td>'+pnlStr+'</td><td>&#x2013;</td></tr>';
       }).join('');
-      const closed=trades.filter(t=>t.pnl!=null);
-      const totalPnl=closed.reduce((s,t)=>s+t.pnl,0);
-      const wins=closed.filter(t=>t.pnl>0).length;
-      const winPct=closed.length?Math.round(wins/closed.length*100):0;
+      const pnlList=trades.map(t=>{const raw=String(t.profitAndLoss||'0').replace(/[\u00a3$\u20ac,]/g,'');return parseFloat(raw)||0;});
+      const totalPnl=pnlList.reduce((s,v)=>s+v,0);
+      const wins=pnlList.filter(v=>v>0).length;
+      const winPct=pnlList.length?Math.round(wins/pnlList.length*100):0;
       tfoot.innerHTML='<tr class="total-row"><td></td><td>Total P&amp;L</td><td></td><td></td><td class="'+(totalPnl>=0?'green':'red')+'">'+( totalPnl>=0?'+':'')+totalPnl.toFixed(2)+'</td><td></td></tr>';
-      sumEl.innerHTML='<span>Trades: <b>'+trades.length+'</b></span><span>Wins: <b>'+wins+'</b></span><span>Win %: <b>'+(closed.length?winPct+'%':'&#x2013;')+'</b></span>';
+      sumEl.innerHTML='<span>Trades: <b>'+trades.length+'</b></span><span>Wins: <b>'+wins+'</b></span><span>Win %: <b>'+(pnlList.length?winPct+'%':'\u2013;')+'</b></span>';
     });
   }catch(e){console.warn('trades err',e);}
 }
-
 function exportCSV(key){
   const label=key==='uk100'?'UK100':'Brent';
   const tbl=document.getElementById('trades-tbl-'+key);
