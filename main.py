@@ -164,6 +164,7 @@ class PaperTrade:
 
 # In-memory paper trade log (resets on restart -- acceptable for paper demo)
 _paper_trades: list[PaperTrade] = []
+_live_trades: list          = []  # closed live trades (in-memory, resets on restart)
 _paper_open: dict[str, PaperTrade] = {}   # keyed by symbol, at most 1 per instrument
 _paper_pnl_total: float = 0.0
 _paper_lock = threading.Lock()
@@ -613,23 +614,42 @@ async def capital_open(symbol: str, direction: str, qty: float,
     return data
 
 
-async def capital_close(symbol: str) -> dict:
-    """Close the open live position for a given epic."""
+async def capital_close(symbol: str, reason: str = "signal") -> dict:
+    """Close the open live position for a given epic and record to _live_trades."""
     cst, token = await _capital_auth()
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.get(f"{CAPITAL_BASE}/api/v1/positions", headers=_cap_headers(cst, token))
     positions = r.json().get("positions", [])
-    deal_id = next(
-        (p["position"]["dealId"] for p in positions if p["market"]["epic"] == symbol), None
+    pos_entry = next(
+        (p for p in positions if p["market"]["epic"] == symbol), None
     )
+    deal_id = pos_entry["position"]["dealId"] if pos_entry else None
     if not deal_id:
         log.warning("No open position for %s to close", symbol)
         return {"status": "not_found"}
+    # Capture trade details before closing
+    pos  = pos_entry["position"]
+    mkt  = pos_entry["market"]
+    direction = pos.get("direction", "BUY")
+    entry     = float(pos.get("level", 0))
+    size      = float(pos.get("size", 0))
+    scale     = float(mkt.get("scalingFactor", 1))
+    bid       = float(mkt.get("bid", 0))
+    offer     = float(mkt.get("offer", bid))
+    close_px  = bid if direction == "BUY" else offer
+    pnl       = round((bid - entry if direction == "BUY" else entry - offer) * size * scale, 2)
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.delete(f"{CAPITAL_BASE}/api/v1/positions/{deal_id}",
                            headers=_cap_headers(cst, token))
-    log.info("[CLOSE] LIVE closed %s | deal=%s", symbol, deal_id)
-    return r.json()
+    # Record closed trade in memory
+    _live_trades.append({
+        "epic": symbol, "direction": direction,
+        "openLevel": str(entry), "closeLevel": str(close_px),
+        "profitAndLoss": str(pnl), "type": "TRADE_RESULT",
+        "date": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S'),
+        "reason": reason,
+    })
+    log.info("[CLOSE] LIVE closed %s 
 
 
 # ==============================================================================
@@ -1009,23 +1029,8 @@ async def get_positions():
 
 @app.get("/trades")
 async def get_trades():
-    """Today's closed trades from Capital.com transaction history."""
-    cst, token = await _capital_auth()
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    from_str = today_start.strftime('%Y-%m-%dT%H:%M:%S')
-    to_str   = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.get(
-            f"{CAPITAL_BASE}/api/v1/history/transactions",
-            params={"from": from_str, "to": to_str, "maxResults": 500},
-            headers=_cap_headers(cst, token),
-        )
-    data = r.json()
-    # Filter to only TRADE_RESULT type if data returned has transactions
-    all_tx = data.get("transactions", [])
-    trade_tx = [t for t in all_tx if t.get("type") == "TRADE_RESULT"]
-    # Return trade results if any, otherwise return all transactions for debugging
-    return {"transactions": trade_tx if trade_tx else all_tx, "total": len(all_tx), "trade_results": len(trade_tx)}
+    """Today's closed live trades (in-memory, resets on restart)."""
+    return {"transactions": _live_trades}
 
 
 @app.get("/price/{epic}")
