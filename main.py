@@ -1017,10 +1017,15 @@ async def get_trades():
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.get(
             f"{CAPITAL_BASE}/api/v1/history/transactions",
-            params={"type": "TRADE_RESULT", "from": from_str, "to": to_str, "maxResults": 50},
+            params={"from": from_str, "to": to_str, "maxResults": 500},
             headers=_cap_headers(cst, token),
         )
-    return r.json()
+    data = r.json()
+    # Filter to only TRADE_RESULT type if data returned has transactions
+    all_tx = data.get("transactions", [])
+    trade_tx = [t for t in all_tx if t.get("type") == "TRADE_RESULT"]
+    # Return trade results if any, otherwise return all transactions for debugging
+    return {"transactions": trade_tx if trade_tx else all_tx, "total": len(all_tx), "trade_results": len(trade_tx)}
 
 
 @app.get("/price/{epic}")
