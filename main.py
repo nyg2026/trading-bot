@@ -1109,16 +1109,16 @@ async def get_trades():
                 "OIL_BRENT": "OIL_BRENT", "OIL BRENT": "OIL_BRENT", "BRENT": "OIL_BRENT",
             }
             all_txns = r.json().get("transactions", [])
-                log.info("[TRADES] Capital.com returned %d raw transactions today", len(all_txns))
-                for txn in all_txns:
-                    # Only include transactions for our instruments
-                    instr_raw = txn.get("instrumentName", "").upper()
-                    instr_norm = instr_raw.replace(" ", "").replace("_", "")
-                    if not instr_raw or not any(
-                        s.replace("_", "") in instr_norm or instr_norm.startswith(s.replace("_", ""))
-                        for s in ["UK100", "OILBRENT"]
-                    ):
-                        continue
+            log.info("[TRADES] Capital.com returned %d raw transactions today", len(all_txns))
+            for txn in all_txns:
+                # Only include transactions for our instruments
+                instr_raw = txn.get("instrumentName", "").upper()
+                instr_norm = instr_raw.replace(" ", "").replace("_", "")
+                if not instr_raw or not any(
+                    s.replace("_", "") in instr_norm or instr_norm.startswith(s.replace("_", ""))
+                    for s in ["UK100", "OILBRENT"]
+                ):
+                    continue
                 deal_id = txn.get("dealId", "")
                 if deal_id and deal_id in live_ids:
                     continue
