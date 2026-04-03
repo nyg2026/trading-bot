@@ -175,6 +175,12 @@
     .bottom-row{grid-template-columns:1fr;}
     .indic-grid2{grid-template-columns:1fr;}
   }
+.btn-pause{padding:6px 18px;font-size:12px;font-weight:700;border:none;border-radius:6px;cursor:pointer;transition:background .2s,transform .1s;letter-spacing:.4px;margin-right:8px;}
+.btn-pause.running{background:#ef4444;color:#fff;}
+.btn-pause.paused{background:#22c55e;color:#fff;}
+.btn-pause:active{transform:scale(.96);}
+.btn-pause:disabled{opacity:.5;cursor:not-allowed;}
+#pauseStatus{font-size:11px;opacity:.55;margin-right:10px;font-weight:600;}
 </style>
 </head>
 <body>
@@ -245,7 +251,7 @@
       </div>
     </div>
     <div class="trades-wrap">
-    <div class="trades-hdr"><span>Today's Trades</span><button class="export-btn" onclick="exportCSV('uk100')">&#x2B07; Export CSV</button></div>
+    <div class="trades-hdr"><span>Today's Trades</span><button id="pauseBtn" class="btn-pause running" onclick="toggleTrading()">&#9646;&#9646; Stop Trading</button><span id="pauseStatus"></span><button class="export-btn" onclick="exportCSV('uk100')">&#x2B07; Export CSV</button></div>
     <table class="trades-tbl" id="trades-tbl-uk100">
       <thead><tr><th>#</th><th>Position</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Reason</th></tr></thead>
       <tbody id="trades-body-uk100"><tr><td colspan="6" class="no-trades">No trades today</td></tr></tbody>
@@ -544,7 +550,49 @@ async function loadAll(){
   _t=setTimeout(loadAll,60000);
 }
 
-document.addEventListener('DOMContentLoaded',()=>{loadAll();});
+document.addEventListener('DOMContentLoaded',()=>{
+    checkBotStatus();loadAll();});
+
+  async function checkBotStatus() {
+    try {
+      const res = await fetch(BOT_URL + '/bot/status');
+      const d = await res.json();
+      _applyPauseState(d.paused);
+    } catch(e) { /* bot unreachable */ }
+  }
+
+  function _applyPauseState(paused) {
+    const btn = document.getElementById('pauseBtn');
+    const lbl = document.getElementById('pauseStatus');
+    if (!btn) return;
+    if (paused) {
+      btn.innerHTML = '&#9654; Start Trading';
+      btn.className = 'btn-pause paused';
+      if (lbl) lbl.textContent = 'PAUSED';
+    } else {
+      btn.innerHTML = '&#9646;&#9646; Stop Trading';
+      btn.className = 'btn-pause running';
+      if (lbl) lbl.textContent = '';
+    }
+  }
+
+  async function toggleTrading() {
+    const btn = document.getElementById('pauseBtn');
+    if (!btn) return;
+    const willPause = btn.classList.contains('running');
+    const endpoint = willPause ? '/bot/pause' : '/bot/resume';
+    btn.disabled = true;
+    try {
+      const res = await fetch(BOT_URL + endpoint, {method: 'POST'});
+      const d = await res.json();
+      _applyPauseState(d.status === 'paused');
+    } catch(e) {
+      alert('Could not reach trading bot: ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
 </script>
 </body>
 </html>
