@@ -176,6 +176,7 @@
     .indic-grid2{grid-template-columns:1fr;}
   }
 .btn-pause{padding:6px 18px;font-size:12px;font-weight:700;border:none;border-radius:6px;cursor:pointer;transition:background .2s,transform .1s;letter-spacing:.4px;margin-right:8px;}
+.btn-sym{padding:4px 10px!important;font-size:10px!important;margin-right:0!important;letter-spacing:.3px!important;}
 .btn-pause.running{background:#ef4444;color:#fff;}
 .btn-pause.paused{background:#22c55e;color:#fff;}
 .btn-pause:active{transform:scale(.96);}
@@ -225,7 +226,10 @@
           <span class="mkt-chg" id="uk100-change">—</span>
         </div>
       </div>
-      <span class="mkt-status" id="uk100-status">—</span>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;">
+        <span class="mkt-status" id="uk100-status">—</span>
+        <button id="pauseBtn-UK100" class="btn-pause btn-sym running" onclick="toggleSymbol('UK100')">⏸ Stop UK100</button>
+      </div>
     </div>
     <div class="mkt-ohlc">
       <div class="ohlc-i">Bid <span id="uk100-bid">—</span></div>
@@ -251,7 +255,7 @@
       </div>
     </div>
     <div class="trades-wrap">
-    <div class="trades-hdr"><span>Today's Trades</span><button id="pauseBtn" class="btn-pause running" onclick="toggleTrading()">&#9646;&#9646; Stop Trading</button><span id="pauseStatus"></span><button class="export-btn" onclick="exportCSV('uk100')">&#x2B07; Export CSV</button></div>
+    <div class="trades-hdr"><span>Today's Trades</span><button id="pauseBtn" class="btn-pause running" onclick="toggleTrading()">&#9646;&#9646; Stop All</button><span id="pauseStatus"></span><button class="export-btn" onclick="exportCSV('uk100')">&#x2B07; Export CSV</button></div>
     <table class="trades-tbl" id="trades-tbl-uk100">
       <thead><tr><th>#</th><th>Position</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Reason</th></tr></thead>
       <tbody id="trades-body-uk100"><tr><td colspan="6" class="no-trades">No trades today</td></tr></tbody>
@@ -271,7 +275,10 @@
           <span class="mkt-chg" id="brent-change">—</span>
         </div>
       </div>
-      <span class="mkt-status" id="brent-status">—</span>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;">
+        <span class="mkt-status" id="brent-status">—</span>
+        <button id="pauseBtn-OIL_BRENT" class="btn-pause btn-sym running" onclick="toggleSymbol('OIL_BRENT')">⏸ Stop Brent</button>
+      </div>
     </div>
     <div class="mkt-ohlc">
       <div class="ohlc-i">Bid <span id="brent-bid">—</span></div>
@@ -557,40 +564,70 @@ document.addEventListener('DOMContentLoaded',()=>{
     try {
       const res = await fetch(BOT_URL + '/bot/status');
       const d = await res.json();
+      // Apply global state
       _applyPauseState(d.paused);
-    } catch(e) { /* bot unreachable */ }
+      // Apply per-symbol states
+      if (d.symbols) {
+        Object.entries(d.symbols).forEach(([sym, paused]) => _applySymbolState(sym, paused));
+      }
+    } catch(e) {}
   }
-
   function _applyPauseState(paused) {
     const btn = document.getElementById('pauseBtn');
     const lbl = document.getElementById('pauseStatus');
     if (!btn) return;
     if (paused) {
-      btn.innerHTML = '&#9654; Start Trading';
+      btn.innerHTML = '&#9650; Start All';
       btn.className = 'btn-pause paused';
-      if (lbl) lbl.textContent = 'PAUSED';
+      if (lbl) lbl.textContent = 'ALL PAUSED';
     } else {
-      btn.innerHTML = '&#9646;&#9646; Stop Trading';
+      btn.innerHTML = '&#9646;&#9646; Stop All';
       btn.className = 'btn-pause running';
       if (lbl) lbl.textContent = '';
     }
   }
-
+  function _applySymbolState(sym, paused) {
+    const btn = document.getElementById('pauseBtn-' + sym);
+    if (!btn) return;
+    if (paused) {
+      btn.innerHTML = '&#9650; Start ' + (sym === 'UK100' ? 'UK100' : 'Brent');
+      btn.className = 'btn-pause btn-sym paused';
+    } else {
+      btn.innerHTML = '&#9646;&#9646; Stop ' + (sym === 'UK100' ? 'UK100' : 'Brent');
+      btn.className = 'btn-pause btn-sym running';
+    }
+  }
   async function toggleTrading() {
     const btn = document.getElementById('pauseBtn');
     if (!btn) return;
     const willPause = btn.classList.contains('running');
-    const endpoint = willPause ? '/bot/pause' : '/bot/resume';
     btn.disabled = true;
     try {
-      const res = await fetch(BOT_URL + endpoint, {method: 'POST'});
+      const res = await fetch(BOT_URL + (willPause ? '/bot/pause' : '/bot/resume'), {method: 'POST'});
       const d = await res.json();
-      _applyPauseState(d.status === 'paused');
-    } catch(e) {
-      alert('Could not reach trading bot: ' + e.message);
-    } finally {
-      btn.disabled = false;
-    }
+      _applyPauseState(willPause);
+      if (d.symbols) Object.entries(d.symbols).forEach(([s,p]) => _applySymbolState(s, p));
+    } catch(e) { alert('Could not reach trading bot: ' + e.message); }
+    finally { btn.disabled = false; }
+  }
+  async function toggleSymbol(sym) {
+    const btn = document.getElementById('pauseBtn-' + sym);
+    if (!btn) return;
+    const willPause = btn.classList.contains('running');
+    btn.disabled = true;
+    try {
+      const ep = willPause ? '/bot/pause/' + sym : '/bot/resume/' + sym;
+      const res = await fetch(BOT_URL + ep, {method: 'POST'});
+      const d = await res.json();
+      _applySymbolState(sym, willPause);
+      if (d.symbols) Object.entries(d.symbols).forEach(([s,p]) => _applySymbolState(s, p));
+      // Update global button based on whether all are paused
+      if (d.symbols) {
+        const allPaused = Object.values(d.symbols).every(Boolean);
+        _applyPauseState(allPaused);
+      }
+    } catch(e) { alert('Could not reach trading bot: ' + e.message); }
+    finally { btn.disabled = false; }
   }
 
 </script>
