@@ -649,7 +649,8 @@ async def capital_close(symbol: str, reason: str = "signal") -> dict:
         "date": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S'),
         "reason": reason,
     })
-    log.info("[CLOSE] LIVE closed %s 
+    log.info("[CLOSE] LIVE closed %s deal=%s", symbol, deal_id)
+    return r.json()
 
 
 # ==============================================================================
