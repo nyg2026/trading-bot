@@ -1124,3 +1124,5 @@ async def force_close(epic: str):
 async def global_error(request: Request, exc: Exception):
     log.exception("[CRASH] Unhandled error: %s", exc)
     return JSONResponse(status_code=500, content={"status": "error", "detail": str(exc)})
+
+# redeploy trigger
