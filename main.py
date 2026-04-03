@@ -61,9 +61,16 @@ LEVERAGE_MAP      = {**_LEVERAGE_DEFAULTS,
 
 # Risk management
 RISK_PCT          = float(os.getenv("RISK_PCT", "2.0"))      # % of risk capital per trade
-ATR_SL_MULT       = float(os.getenv("ATR_SL_MULT", "1.0"))  # SL = ATR_SL_MULT x ATR
+ATR_SL_MULT       = float(os.getenv("ATR_SL_MULT", "1.5"))  # SL = ATR_SL_MULT x ATR (1.5x gives trade room to breathe)
 ATR_TP_MULT       = float(os.getenv("ATR_TP_MULT", "0.25"))  # TP = ATR_TP_MULT x ATR
 DEFAULT_QTY       = float(os.getenv("DEFAULT_QTY", "0.1"))  # fallback minimum lot size
+
+# Slippage controls -- protect entry quality on live orders
+SPREAD_MAX        = {"UK100": float(os.getenv("SPREAD_MAX_UK100", "2.0")),      # max allowed spread (points) before skipping
+                     "OIL_BRENT": float(os.getenv("SPREAD_MAX_OIL", "0.06"))}  # Brent spread in $ terms
+PRICE_TOL_PCT     = float(os.getenv("PRICE_TOL_PCT", "0.05"))    # max % price drift from signal before skipping entry
+ENTRY_OFFSET_SECS = int(os.getenv("ENTRY_OFFSET_SECS", "3"))     # seconds to wait after candle close (let bot-spike settle)
+SLIPPAGE_BUFFER   = float(os.getenv("SLIPPAGE_BUFFER", "0.5"))   # points added to TP to absorb estimated entry slippage
 
 # Profit protection: never risk profits, only original capital
 PROTECT_PROFITS   = os.getenv("PROTECT_PROFITS", "true").lower() == "true"
@@ -553,7 +560,7 @@ async def _get_risk_capital() -> float:
     return current
 
 
-async def fetch_candles(epic: str) -> tuple[list, list, list, list]:
+async def fetch_candles(epic: str) -> tuple[list, list, list, list, float]:
     """Fetch OHLCV candles. Returns (opens, highs, lows, closes)."""
     cst, token = await _capital_auth()
     async with httpx.AsyncClient(timeout=20) as c:
@@ -569,7 +576,8 @@ async def fetch_candles(epic: str) -> tuple[list, list, list, list]:
     highs  = [max(p["highPrice"]["bid"],  p["highPrice"]["ask"])    for p in prices]
     lows   = [min(p["lowPrice"]["bid"],   p["lowPrice"]["ask"])     for p in prices]
     closes = [(p["closePrice"]["bid"] + p["closePrice"]["ask"]) / 2 for p in prices]
-    return opens, highs, lows, closes
+    last_spread = prices[-1]["closePrice"]["ask"] - prices[-1]["closePrice"]["bid"]
+    return opens, highs, lows, closes, last_spread
 
 
 async def fetch_candles_timestamped(epic: str) -> list[dict]:
@@ -672,7 +680,7 @@ def _is_london_session() -> bool:
 async def evaluate_symbol(epic: str):
     """Fetch candles, score 7 indicators, and enter/exit based on confluence."""
     try:
-        _, highs, lows, closes = await fetch_candles(epic)
+        _, highs, lows, closes, spread = await fetch_candles(epic)
         if len(closes) < 50:
             log.warning("[WARN]  %s: only %d candles -- need 50+", epic, len(closes))
             return
@@ -720,13 +728,49 @@ async def evaluate_symbol(epic: str):
             log.info("[BLOCK] %s: max positions reached (%d)", epic, MAX_OPEN_TRADES)
             return
 
+        # --- Slippage Control 2: Spread Filter ---------------------------------
+        # If the bid/ask spread is unusually wide (e.g. during news spikes), skip entry.
+        # Wide spread = guaranteed slippage before you even start.
+        if not PAPER_TRADE:
+            spread_max = SPREAD_MAX.get(epic, 2.0)
+            if spread > spread_max:
+                log.info("[SLIP] %s: spread %.4f > max %.4f -- wide spread, skipping entry",
+                         epic, spread, spread_max)
+                return
+
+        # --- Slippage Control 3: Execution Offset (candle-close bot-spike) --------
+        # Thousands of bots fire at the same candle close. Waiting a few seconds lets
+        # the initial spike of market orders settle to a more stable "true" price.
+        if not PAPER_TRADE and ENTRY_OFFSET_SECS > 0:
+            log.info("[SLIP] %s: offset %ds -- letting candle-close bot-spike settle",
+                     epic, ENTRY_OFFSET_SECS)
+            await asyncio.sleep(ENTRY_OFFSET_SECS)
+
+        # --- Slippage Control 1: Price Tolerance Buffer ----------------------------
+        # Re-fetch the current price after the offset sleep. If the market has moved
+        # more than PRICE_TOL_PCT from our signal price, the setup is stale -- skip.
+        if not PAPER_TRADE:
+            _, _, _, fresh_closes, _fsp = await fetch_candles(epic)
+            if fresh_closes:
+                fresh_price = fresh_closes[-1]
+                drift_pct = abs(fresh_price - price) / price * 100.0
+                if drift_pct > PRICE_TOL_PCT:
+                    log.info("[SLIP] %s: price drifted %.3f%% > %.3f%% tolerance -- stale signal, skipping",
+                             epic, drift_pct, PRICE_TOL_PCT)
+                    return
+                price = fresh_price  # use the refreshed price for SL/TP calculations
+
         # ATR-based SL and TP levels
         if direction == "BUY":
             sl_level = round(price - atr * ATR_SL_MULT, 4)
-            tp_level = round(price + atr * ATR_TP_MULT, 4)
+            tp_raw   = round(price + atr * ATR_TP_MULT, 4)
+            # Slippage Control 4: extend TP by SLIPPAGE_BUFFER points so that after
+            # the estimated entry slippage cost, the net profit is still the target 2:1 ratio
+            tp_level = round(tp_raw + SLIPPAGE_BUFFER, 4) if not PAPER_TRADE else tp_raw
         else:
             sl_level = round(price + atr * ATR_SL_MULT, 4)
-            tp_level = round(price - atr * ATR_TP_MULT, 4)
+            tp_raw   = round(price - atr * ATR_TP_MULT, 4)
+            tp_level = round(tp_raw - SLIPPAGE_BUFFER, 4) if not PAPER_TRADE else tp_raw
 
         # ATR-based position sizing: risk RISK_PCT% of account
         if PAPER_TRADE:
@@ -846,7 +890,7 @@ async def eod_close_loop():
                 # Close any open paper positions at current approximate price
                 for sym in list(_paper_open.keys()):
                     try:
-                        _, _, _, closes = await fetch_candles(sym)
+                        _, _, _, closes, _sp = await fetch_candles(sym)
                         close_px = closes[-1] if closes else _paper_open[sym].entry
                         _paper_close_trade(sym, close_px, "EOD")
                     except Exception as e:
@@ -956,7 +1000,7 @@ async def get_signals():
     results = {}
     for epic in sorted(ALLOWED_SYMBOLS):
         try:
-            _, highs, lows, closes = await fetch_candles(epic)
+            _, highs, lows, closes, _sp = await fetch_candles(epic)
             direction, score, details = compute_signal(epic, closes, highs, lows)
             results[epic] = {
                 "direction":    direction,
@@ -1239,7 +1283,7 @@ async def webhook(payload: AlertPayload):
         direction = "BUY" if payload.action == "buy" else "SELL"
         # Validate against live indicators before acting
         try:
-            _, highs, lows, closes = await fetch_candles(sym)
+            _, highs, lows, closes, _sp = await fetch_candles(sym)
             sig_dir, score, details = compute_signal(sym, closes, highs, lows)
             atr = details.get("atr", 0)
             if sig_dir != direction:
@@ -1282,7 +1326,7 @@ async def force_close(epic: str):
     sym = epic.upper()
     if PAPER_TRADE:
         try:
-            _, _, _, closes = await fetch_candles(sym)
+            _, _, _, closes, _sp = await fetch_candles(sym)
             px = closes[-1] if closes else 0
         except Exception:
             px = _paper_open.get(sym, None)
