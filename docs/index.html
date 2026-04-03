@@ -498,14 +498,14 @@ async function loadTrades(){
         tfoot.innerHTML='';sumEl.innerHTML='';return;
       }
       tbody.innerHTML=trades.map((t,i)=>{
-        const isBuy=(t.direction||'').toUpperCase()==='BUY';
-        const dir=isBuy?'<span class="green">LONG</span>':'<span class="red">SHORT</span>';
+        const dirRaw=(t.direction||'').toUpperCase();
+        const dir=dirRaw==='BUY'?'<span class="green">LONG</span>':dirRaw==='SELL'?'<span class="red">SHORT</span>':'<span style="opacity:0.5">&#x2013;</span>';
         const entry=parseFloat(t.openLevel)||0;
         const exit=parseFloat(t.closeLevel)||0;
         const pnlRaw=String(t.profitAndLoss||'0').replace(/[\u00a3$\u20ac,]/g,'');
         const pnl=parseFloat(pnlRaw)||0;
         const pnlStr=(pnl>=0?'<span class="green">+':'<span class="red">')+pnl.toFixed(2)+'</span>';
-        return '<tr><td>'+(i+1)+'</td><td>'+dir+'</td><td>'+entry.toFixed(2)+'</td><td>'+exit.toFixed(2)+'</td><td>'+pnlStr+'</td><td>&#x2013;</td></tr>';
+        return '<tr><td>'+(i+1)+'</td><td>'+dir+'</td><td>'+(entry>0?entry.toFixed(2):'&#x2013;')+'</td><td>'+(exit>0?exit.toFixed(2):'&#x2013;')+'</td><td>'+pnlStr+'</td><td>&#x2013;</td></tr>';
       }).join('');
       const pnlList=trades.map(t=>{const raw=String(t.profitAndLoss||'0').replace(/[\u00a3$\u20ac,]/g,'');return parseFloat(raw)||0;});
       const totalPnl=pnlList.reduce((s,v)=>s+v,0);
