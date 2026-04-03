@@ -810,14 +810,18 @@ async def eod_close_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _starting_balance
-    if CAPITAL_API_KEY:
-        try:
-            _starting_balance = await _capital_get_balance()
-            log.info("[GBP] Starting balance: GBP%.2f (profit protection=%s)", _starting_balance, PROTECT_PROFITS)
-        except Exception as e:
-            log.warning("Could not fetch starting balance: %s -- using default GBP1000", e)
-            _starting_balance = 1000.0
+    _starting_balance = 1000.0  # sensible default; updated by background task
 
+    async def _init_balance():
+        global _starting_balance
+        if CAPITAL_API_KEY:
+            try:
+                _starting_balance = await _capital_get_balance()
+                log.info("[GBP] Starting balance: GBP%.2f (profit protection=%s)", _starting_balance, PROTECT_PROFITS)
+            except Exception as e:
+                log.warning("Could not fetch starting balance: %s -- using default GBP1000", e)
+
+    asyncio.create_task(_init_balance())
     log.info(
         "[START] Bot started | exchange=%s | mode=%s | scan=%ds | %s | "
         "risk=%.1f%% | sl_mult=%.1fx | tp_mult=%.1fx | "
