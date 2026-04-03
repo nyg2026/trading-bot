@@ -165,6 +165,7 @@ class PaperTrade:
 # In-memory paper trade log (resets on restart -- acceptable for paper demo)
 _paper_trades: list[PaperTrade] = []
 _live_trades: list          = []  # closed live trades (in-memory, resets on restart)
+_trading_paused: bool        = False               # halt new signals via /bot/pause
 _paper_open: dict[str, PaperTrade] = {}   # keyed by symbol, at most 1 per instrument
 _paper_pnl_total: float = 0.0
 _paper_lock = threading.Lock()
@@ -778,7 +779,9 @@ async def _reconcile_positions():
                         )
                     for txn in hr.json().get("transactions", []):
                         instr = txn.get("instrumentName", "").upper()
-                        if t.symbol in instr or t.symbol.replace("_", " ") in instr:
+                        instr_norm = instr.replace(" ", "").replace("_", "")
+                        sym_norm   = t.symbol.replace(" ", "").replace("_", "")
+                        if sym_norm in instr_norm or instr_norm.startswith(sym_norm):
                             raw = str(txn.get("size", "0")).replace("\u00a3","").replace("$","").replace(",","")
                             pnl_str = raw
                             break
@@ -804,6 +807,10 @@ async def scan_loop():
              "PAPER" if PAPER_TRADE else "LIVE")
     await asyncio.sleep(10)  # Brief startup delay
     while True:
+        if _trading_paused:
+            log.info("[BOT] Trading paused -- skipping scan")
+            await asyncio.sleep(SCAN_INTERVAL)
+            continue
         if _is_london_session():
             log.info("[TIMER]  Scanning %d symbols (London session)...", len(ALLOWED_SYMBOLS))
             await _reconcile_positions()
@@ -1120,6 +1127,30 @@ async def get_trades():
         except Exception as e:
             log.warning("Could not merge Capital.com history: %s", e)
     return {"transactions": result}
+
+
+@app.post("/bot/pause")
+async def pause_bot():
+    """Pause the scan loop -- no new trades will be opened."""
+    global _trading_paused
+    _trading_paused = True
+    log.info("[BOT] Trading PAUSED via dashboard")
+    return {"status": "paused"}
+
+
+@app.post("/bot/resume")
+async def resume_bot():
+    """Resume the scan loop."""
+    global _trading_paused
+    _trading_paused = False
+    log.info("[BOT] Trading RESUMED via dashboard")
+    return {"status": "running"}
+
+
+@app.get("/bot/status")
+async def bot_status_endpoint():
+    """Current bot pause state."""
+    return {"paused": _trading_paused, "status": "paused" if _trading_paused else "running"}
 
 
 @app.get("/price/{epic}")
