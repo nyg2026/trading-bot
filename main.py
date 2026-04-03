@@ -752,6 +752,51 @@ async def evaluate_symbol(epic: str):
         log.error("[ERR] evaluate_symbol(%s) error: %s", epic, e)
 
 
+
+async def _reconcile_positions():
+    """Detect positions closed externally on Capital.com (TP/SL) and record them."""
+    if PAPER_TRADE:
+        return
+    tracked = trade_mgr.all()
+    if not tracked:
+        return
+    try:
+        cst, token = await _capital_auth()
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(f"{CAPITAL_BASE}/api/v1/positions", headers=_cap_headers(cst, token))
+        open_epics = {p["market"]["epic"] for p in r.json().get("positions", [])}
+        today_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT00:00:00')
+        for t in tracked:
+            if t.symbol not in open_epics:
+                pnl_str = "0"
+                try:
+                    async with httpx.AsyncClient(timeout=15) as c:
+                        hr = await c.get(
+                            f"{CAPITAL_BASE}/api/v1/history/transactions",
+                            params={"from": today_str, "type": "ALL", "maxResults": 20},
+                            headers=_cap_headers(cst, token),
+                        )
+                    for txn in hr.json().get("transactions", []):
+                        instr = txn.get("instrumentName", "").upper()
+                        if t.symbol in instr or t.symbol.replace("_", " ") in instr:
+                            raw = str(txn.get("size", "0")).replace("\u00a3","").replace("$","").replace(",","")
+                            pnl_str = raw
+                            break
+                except Exception:
+                    pass
+                _live_trades.append({
+                    "epic": t.symbol, "direction": t.direction,
+                    "openLevel": str(t.entry), "closeLevel": "0",
+                    "profitAndLoss": pnl_str, "type": "TRADE_RESULT",
+                    "date": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S'),
+                    "reason": "TP/SL",
+                })
+                trade_mgr.remove_by_symbol(t.symbol)
+                log.info("[RECONCILE] %s closed externally | direction=%s | P\u0026L=%s",
+                         t.symbol, t.direction, pnl_str)
+    except Exception as e:
+        log.error("[RECONCILE] Error: %s", e)
+
 async def scan_loop():
     """Main autonomous scan -- runs every SCAN_INTERVAL seconds during London session."""
     log.info("[BOT] Scan loop started | interval=%ds | symbols=%s | min_score=%d/7 | mode=%s",
@@ -761,6 +806,7 @@ async def scan_loop():
     while True:
         if _is_london_session():
             log.info("[TIMER]  Scanning %d symbols (London session)...", len(ALLOWED_SYMBOLS))
+            await _reconcile_positions()
             for epic in sorted(ALLOWED_SYMBOLS):
                 await evaluate_symbol(epic)
                 await asyncio.sleep(2)
@@ -1034,8 +1080,46 @@ async def get_positions():
 
 @app.get("/trades")
 async def get_trades():
-    """Today's closed live trades (in-memory, resets on restart)."""
-    return {"transactions": _live_trades}
+    """Today's closed live trades -- in-memory + Capital.com history (merged)."""
+    result = list(_live_trades)
+    if not PAPER_TRADE:
+        try:
+            today_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT00:00:00')
+            cst, token = await _capital_auth()
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(
+                    f"{CAPITAL_BASE}/api/v1/history/transactions",
+                    params={"from": today_str, "type": "ALL", "maxResults": 50},
+                    headers=_cap_headers(cst, token),
+                )
+            live_ids = {t.get("dealId", "") for t in result}
+            name_map = {
+                "UK100": "UK100", "UK 100": "UK100",
+                "OIL_BRENT": "OIL_BRENT", "OIL BRENT": "OIL_BRENT", "BRENT": "OIL_BRENT",
+            }
+            for txn in r.json().get("transactions", []):
+                note = txn.get("note", "").lower()
+                type_ = txn.get("transactionType", txn.get("type", "")).upper()
+                if "trade" not in note and type_ not in ("TRADE", "TRADE_RESULT"):
+                    continue
+                deal_id = txn.get("dealId", "")
+                if deal_id and deal_id in live_ids:
+                    continue
+                instrument = txn.get("instrumentName", "").upper()
+                epic = next((v for k, v in name_map.items() if k in instrument), instrument)
+                raw = str(txn.get("size", "0")).replace("\u00a3", "").replace("$", "").replace(",", "")
+                result.append({
+                    "epic": epic, "direction": None,
+                    "openLevel": "0", "closeLevel": "0",
+                    "profitAndLoss": raw, "type": "TRADE_RESULT",
+                    "date": txn.get("dateUtc", txn.get("date", "")),
+                    "reason": txn.get("note", "history"),
+                    "dealId": deal_id,
+                })
+                live_ids.add(deal_id)
+        except Exception as e:
+            log.warning("Could not merge Capital.com history: %s", e)
+    return {"transactions": result}
 
 
 @app.get("/price/{epic}")
