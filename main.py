@@ -165,7 +165,7 @@ class PaperTrade:
 # In-memory paper trade log (resets on restart -- acceptable for paper demo)
 _paper_trades: list[PaperTrade] = []
 _live_trades: list          = []  # closed live trades (in-memory, resets on restart)
-_trading_paused: bool        = False               # halt new signals via /bot/pause
+_trading_paused: dict        = {}                  # per-symbol pause; key=symbol, val=bool
 _paper_open: dict[str, PaperTrade] = {}   # keyed by symbol, at most 1 per instrument
 _paper_pnl_total: float = 0.0
 _paper_lock = threading.Lock()
@@ -807,14 +807,18 @@ async def scan_loop():
              "PAPER" if PAPER_TRADE else "LIVE")
     await asyncio.sleep(10)  # Brief startup delay
     while True:
-        if _trading_paused:
-            log.info("[BOT] Trading paused -- skipping scan")
+        if ALLOWED_SYMBOLS and all(_trading_paused.get(s, False) for s in ALLOWED_SYMBOLS):
+            log.info("[BOT] All symbols paused -- skipping scan")
             await asyncio.sleep(SCAN_INTERVAL)
             continue
         if _is_london_session():
             log.info("[TIMER]  Scanning %d symbols (London session)...", len(ALLOWED_SYMBOLS))
             await _reconcile_positions()
             for epic in sorted(ALLOWED_SYMBOLS):
+                if _trading_paused.get(epic, False):
+                    log.info("[BOT] %s paused -- skipping", epic)
+                    await asyncio.sleep(2)
+                    continue
                 await evaluate_symbol(epic)
                 await asyncio.sleep(2)
         else:
@@ -1104,11 +1108,17 @@ async def get_trades():
                 "UK100": "UK100", "UK 100": "UK100",
                 "OIL_BRENT": "OIL_BRENT", "OIL BRENT": "OIL_BRENT", "BRENT": "OIL_BRENT",
             }
-            for txn in r.json().get("transactions", []):
-                note = txn.get("note", "").lower()
-                type_ = txn.get("transactionType", txn.get("type", "")).upper()
-                if "trade" not in note and type_ not in ("TRADE", "TRADE_RESULT"):
-                    continue
+            all_txns = r.json().get("transactions", [])
+                log.info("[TRADES] Capital.com returned %d raw transactions today", len(all_txns))
+                for txn in all_txns:
+                    # Only include transactions for our instruments
+                    instr_raw = txn.get("instrumentName", "").upper()
+                    instr_norm = instr_raw.replace(" ", "").replace("_", "")
+                    if not instr_raw or not any(
+                        s.replace("_", "") in instr_norm or instr_norm.startswith(s.replace("_", ""))
+                        for s in ["UK100", "OILBRENT"]
+                    ):
+                        continue
                 deal_id = txn.get("dealId", "")
                 if deal_id and deal_id in live_ids:
                     continue
@@ -1131,26 +1141,70 @@ async def get_trades():
 
 @app.post("/bot/pause")
 async def pause_bot():
-    """Pause the scan loop -- no new trades will be opened."""
+    """Pause all symbols."""
     global _trading_paused
-    _trading_paused = True
-    log.info("[BOT] Trading PAUSED via dashboard")
-    return {"status": "paused"}
+    for s in ALLOWED_SYMBOLS:
+        _trading_paused[s] = True
+    log.info("[BOT] ALL symbols PAUSED via dashboard")
+    return {"status": "paused", "symbols": {s: True for s in ALLOWED_SYMBOLS}}
 
 
 @app.post("/bot/resume")
 async def resume_bot():
-    """Resume the scan loop."""
+    """Resume all symbols."""
     global _trading_paused
-    _trading_paused = False
-    log.info("[BOT] Trading RESUMED via dashboard")
-    return {"status": "running"}
+    for s in ALLOWED_SYMBOLS:
+        _trading_paused[s] = False
+    log.info("[BOT] ALL symbols RESUMED via dashboard")
+    return {"status": "running", "symbols": {s: False for s in ALLOWED_SYMBOLS}}
+
+
+@app.post("/bot/pause/{symbol}")
+async def pause_symbol(symbol: str):
+    """Pause a specific symbol."""
+    global _trading_paused
+    sym = symbol.upper()
+    _trading_paused[sym] = True
+    log.info("[BOT] %s PAUSED via dashboard", sym)
+    return {"status": "paused", "symbol": sym, "symbols": {s: _trading_paused.get(s, False) for s in ALLOWED_SYMBOLS}}
+
+
+@app.post("/bot/resume/{symbol}")
+async def resume_symbol(symbol: str):
+    """Resume a specific symbol."""
+    global _trading_paused
+    sym = symbol.upper()
+    _trading_paused[sym] = False
+    log.info("[BOT] %s RESUMED via dashboard", sym)
+    return {"status": "running", "symbol": sym, "symbols": {s: _trading_paused.get(s, False) for s in ALLOWED_SYMBOLS}}
 
 
 @app.get("/bot/status")
 async def bot_status_endpoint():
-    """Current bot pause state."""
-    return {"paused": _trading_paused, "status": "paused" if _trading_paused else "running"}
+    """Per-symbol and global pause state."""
+    syms = {s: _trading_paused.get(s, False) for s in ALLOWED_SYMBOLS}
+    all_paused = bool(syms) and all(syms.values())
+    return {"paused": all_paused, "status": "paused" if all_paused else "running", "symbols": syms}
+
+
+@app.get("/debug/transactions")
+async def debug_transactions():
+    """Raw Capital.com transaction history -- for debugging the /trades endpoint."""
+    if PAPER_TRADE:
+        return {"error": "PAPER_TRADE mode -- no Capital.com connection"}
+    try:
+        today_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT00:00:00')
+        cst, token = await _capital_auth()
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(
+                f"{CAPITAL_BASE}/api/v1/history/transactions",
+                params={"from": today_str, "type": "ALL", "maxResults": 50},
+                headers=_cap_headers(cst, token),
+            )
+        data = r.json()
+        return {"status": r.status_code, "count": len(data.get("transactions", [])), "data": data}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.get("/price/{epic}")
