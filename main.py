@@ -1135,53 +1135,87 @@ async def get_positions():
 
 @app.get("/trades")
 async def get_trades():
-    """Today's closed live trades -- in-memory + Capital.com history (merged)."""
+    """Today's trades: open positions (live UPL) + today's closed trades from history."""
     result = list(_live_trades)
     if not PAPER_TRADE:
         try:
-            today_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT00:00:00')
             cst, token = await _capital_auth()
-            async with httpx.AsyncClient(timeout=15) as c:
-                r = await c.get(
-                    f"{CAPITAL_BASE}/api/v1/history/transactions",
-                    params={"from": today_str, "type": "ALL", "maxResults": 50},
-                    headers=_cap_headers(cst, token),
-                )
-            live_ids = {t.get("dealId", "") for t in result}
             name_map = {
                 "UK100": "UK100", "UK 100": "UK100",
                 "OIL_BRENT": "OIL_BRENT", "OIL BRENT": "OIL_BRENT", "BRENT": "OIL_BRENT",
             }
-            all_txns = r.json().get("transactions", [])
-            log.info("[TRADES] Capital.com returned %d raw transactions today", len(all_txns))
-            for txn in all_txns:
-                # Only include transactions for our instruments
-                instr_raw = txn.get("instrumentName", "").upper()
-                instr_norm = instr_raw.replace(" ", "").replace("_", "")
-                if not instr_raw or not any(
-                    s.replace("_", "") in instr_norm or instr_norm.startswith(s.replace("_", ""))
-                    for s in ["UK100", "OILBRENT"]
-                ):
+ 
+            # 1. Fetch OPEN positions -- live unrealised P&L (upl)
+            async with httpx.AsyncClient(timeout=15) as c:
+                pos_r = await c.get(
+                    f"{CAPITAL_BASE}/api/v1/positions",
+                    headers=_cap_headers(cst, token),
+                )
+            positions = pos_r.json().get("positions", [])
+            log.info("[TRADES] %d open positions from Capital.com", len(positions))
+            for pos in positions:
+                pos_data = pos.get("position", {})
+                market = pos.get("market", {})
+                instr_raw = market.get("instrumentName", market.get("epic", "")).upper()
+                if not any(k in instr_raw for k in ["UK100", "UK 100", "OIL", "BRENT"]):
                     continue
+                deal_id = pos_data.get("dealId", "")
+                if deal_id and any(t.get("dealId") == deal_id for t in result):
+                    continue
+                epic = next((v for k, v in name_map.items() if k in instr_raw), instr_raw.replace(" ", "_"))
+                upl = pos_data.get("upl", 0)
+                result.append({
+                    "epic": epic,
+                    "direction": pos_data.get("direction", ""),
+                    "openLevel": str(pos_data.get("level", pos_data.get("openLevel", "0"))),
+                    "closeLevel": "0",
+                    "profitAndLoss": str(round(float(upl), 2)) if upl else "0",
+                    "type": "OPEN_POSITION",
+                    "date": pos_data.get("createdDateUtc", pos_data.get("createdDate", "")),
+                    "reason": "OPEN",
+                    "dealId": deal_id,
+                    "size": str(pos_data.get("size", "")),
+                    "stopLevel": str(pos_data.get("stopLevel", "")),
+                    "profitLevel": str(pos_data.get("limitLevel", "")),
+                })
+ 
+            # 2. Fetch today's CLOSED transactions from history
+            today_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT00:00:00')
+            async with httpx.AsyncClient(timeout=15) as c:
+                hist_r = await c.get(
+                    f"{CAPITAL_BASE}/api/v1/history/transactions",
+                    params={"from": today_str, "type": "ALL", "maxResults": 100},
+                    headers=_cap_headers(cst, token),
+                )
+            live_ids = {t.get("dealId", "") for t in result}
+            for txn in hist_r.json().get("transactions", []):
+                instr_raw = txn.get("instrumentName", "").upper()
+                if not any(k in instr_raw for k in ["UK100", "UK 100", "OIL", "BRENT"]):
+                    continue
+                close_level = str(txn.get("closeLevel", "0"))
+                if close_level in ("0", "", "null"):
+                    continue  # skip still-open entries (no close price yet)
                 deal_id = txn.get("dealId", "")
                 if deal_id and deal_id in live_ids:
                     continue
-                instrument = txn.get("instrumentName", "").upper()
-                epic = next((v for k, v in name_map.items() if k in instrument), instrument)
-                raw = str(txn.get("size", "0")).replace("\u00a3", "").replace("$", "").replace(",", "")
+                epic = next((v for k, v in name_map.items() if k in instr_raw), instr_raw.replace(" ", "_"))
+                pnl = str(txn.get("profitAndLoss", "0")).replace("£", "").replace("$", "").replace(",", "")
                 result.append({
-                    "epic": epic, "direction": None,
-                    "openLevel": "0", "closeLevel": "0",
-                    "profitAndLoss": raw, "type": "TRADE_RESULT",
+                    "epic": epic,
+                    "direction": txn.get("direction", ""),
+                    "openLevel": str(txn.get("openLevel", "0")),
+                    "closeLevel": close_level,
+                    "profitAndLoss": pnl,
+                    "type": "TRADE_RESULT",
                     "date": txn.get("dateUtc", txn.get("date", "")),
-                    "reason": txn.get("note", "history"),
+                    "reason": txn.get("note", "TP/SL"),
                     "dealId": deal_id,
                 })
                 live_ids.add(deal_id)
         except Exception as e:
-            log.warning("Could not merge Capital.com history: %s", e)
+            log.warning("Could not merge Capital.com trades: %s", e)
+    result.sort(key=lambda t: t.get("date", ""), reverse=True)
     return {"transactions": result}
-
 
 @app.post("/bot/pause")
 async def pause_bot():
