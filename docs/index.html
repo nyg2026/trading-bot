@@ -157,7 +157,7 @@
   .empty-s{padding:18px;text-align:center;color:var(--muted);font-size:12px;}
 
   /* ══ BOTTOM ROW ═══════════════════════════════════════════════════════════ */
-  .bottom-row{grid-area:bottom;display:grid;grid-template-columns:1fr;gap:10px;}
+  .bottom-row{grid-area:bottom;display:grid;grid-template-columns:1fr 1fr;gap:10px;}
   .cfg-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:11px 13px;overflow:hidden;}
   .card-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);margin-bottom:7px;}
   /* config */
@@ -182,6 +182,23 @@
 .btn-pause:active{transform:scale(.96);}
 .btn-pause:disabled{opacity:.5;cursor:not-allowed;}
 #pauseStatus{font-size:11px;opacity:.55;margin-right:10px;font-weight:600;}
+/* ── OPTIMISER ───────────────────────────────────────────────── */
+.opt-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;}
+.opt-src-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700;}
+.opt-src-badge.optimised{background:rgba(34,197,94,.1);color:var(--green);border:1px solid rgba(34,197,94,.2);}
+.opt-src-badge.env_vars{background:rgba(245,158,11,.1);color:var(--yellow);border:1px solid rgba(245,158,11,.2);}
+.opt-grid{display:grid;grid-template-columns:1fr 1fr;gap:0;}
+.opt-row{display:flex;justify-content:space-between;align-items:center;padding:4.5px 0;border-bottom:1px solid rgba(26,45,69,.4);}
+.opt-row:last-child{border-bottom:none;}
+.opt-k{font-size:10px;color:var(--muted);}
+.opt-v{font-size:11px;font-weight:600;font-family:var(--mono);}
+.opt-divider{grid-column:1/-1;border-top:1px solid var(--border);margin:5px 0 3px;}
+.opt-section-lbl{grid-column:1/-1;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);padding:3px 0 1px;}
+.btn-optimise{padding:4px 12px;font-size:10px;font-weight:700;border:1px solid var(--border2);background:var(--card2);color:var(--text);border-radius:5px;cursor:pointer;transition:all .2s;letter-spacing:.3px;}
+.btn-optimise:hover:not(:disabled){border-color:var(--blue);color:var(--blue);}
+.btn-optimise:disabled{opacity:.5;cursor:not-allowed;}
+.opt-spinner{display:inline-block;width:9px;height:9px;border:2px solid var(--border2);border-top-color:var(--blue);border-radius:50%;animation:spin .7s linear infinite;margin-right:4px;vertical-align:middle;}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
@@ -320,8 +337,9 @@
     <div id="positions-container"><div class="empty-s">Loading positions…</div></div>
   </div>
 
-  <!-- ── BOTTOM: News + Config ── -->
+  <!-- ── BOTTOM: Config + Optimiser ── -->
   <div class="bottom-row">
+
     <div class="cfg-card">
       <div class="card-lbl">⚙️ Bot Config</div>
       <div class="cfg-grid">
@@ -335,6 +353,30 @@
         <div class="cfg-row"><span class="cfg-k">Session</span><span class="cfg-v" id="cfg-session">—</span></div>
       </div>
     </div>
+
+    <div class="cfg-card">
+      <div class="opt-header">
+        <div class="card-lbl" style="margin-bottom:0">🤖 Self-Learning Optimiser</div>
+        <span id="opt-src-badge" class="opt-src-badge env_vars">env defaults</span>
+      </div>
+      <div class="opt-grid" style="margin-top:7px;">
+        <div class="opt-section-lbl">Live Parameters</div>
+        <div class="opt-row"><span class="opt-k">ATR SL Mult</span><span class="opt-v red" id="opt-sl">—</span></div>
+        <div class="opt-row"><span class="opt-k">ATR TP Mult</span><span class="opt-v green" id="opt-tp">—</span></div>
+        <div class="opt-row"><span class="opt-k">Min Signal Score</span><span class="opt-v" id="opt-score">—</span></div>
+        <div class="opt-divider"></div>
+        <div class="opt-section-lbl">Last Backtest Results</div>
+        <div class="opt-row"><span class="opt-k">Profit Factor</span><span class="opt-v green" id="opt-pf">—</span></div>
+        <div class="opt-row"><span class="opt-k">Win Rate</span><span class="opt-v" id="opt-wr">—</span></div>
+        <div class="opt-row"><span class="opt-k">Total Trades</span><span class="opt-v" id="opt-trades">—</span></div>
+        <div class="opt-divider"></div>
+        <div class="opt-row" style="grid-column:1/-1;justify-content:space-between;">
+          <span class="opt-k" id="opt-last-run">Last optimised: —</span>
+          <button class="btn-optimise" id="opt-btn" onclick="triggerOptimise()">⚡ Run Now</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 
 </main>
@@ -488,6 +530,43 @@ async function loadSignals(){
   }catch(e){}
 }
 
+// ── OPTIMISER STATUS ──
+async function loadOptimizerStatus(){
+  try{
+    const d=await fetch(BOT_URL+'/optimize/status').then(r=>r.json());
+    const src=d.source||'env_vars';
+    const badge=document.getElementById('opt-src-badge');
+    badge.className='opt-src-badge '+(src==='optimised'?'optimised':'env_vars');
+    badge.textContent=src==='optimised'?'✦ optimised':'env defaults';
+    const p=d.live_params||{};
+    document.getElementById('opt-sl').textContent=(p.ATR_SL_MULT??'—')+'×';
+    document.getElementById('opt-tp').textContent=(p.ATR_TP_MULT??'—')+'×';
+    document.getElementById('opt-score').textContent=p.MIN_SIGNAL_SCORE??'—';
+    const m=d.backtest_metrics||{};
+    document.getElementById('opt-pf').textContent=m.profit_factor!=null?Number(m.profit_factor).toFixed(3):'—';
+    document.getElementById('opt-wr').textContent=m.win_rate!=null?Number(m.win_rate).toFixed(1)+'%':'—';
+    document.getElementById('opt-trades').textContent=m.total_trades??'—';
+    const ts=d.last_optimised;
+    document.getElementById('opt-last-run').textContent=ts?'Last run: '+ago(ts):'Never run';
+  }catch(e){document.getElementById('opt-last-run').textContent='Status unavailable';}
+}
+async function triggerOptimise(){
+  const btn=document.getElementById('opt-btn');
+  btn.disabled=true;
+  btn.innerHTML='<span class="opt-spinner"></span>Running…';
+  document.getElementById('opt-last-run').textContent='Optimising (30–60s)…';
+  try{
+    await fetch(BOT_URL+'/optimize',{method:'POST'}).then(r=>r.json());
+    await loadOptimizerStatus();
+    btn.innerHTML='✓ Done';
+    setTimeout(()=>{btn.innerHTML='⚡ Run Now';btn.disabled=false;},2500);
+  }catch(e){
+    btn.innerHTML='✗ Failed';
+    document.getElementById('opt-last-run').textContent='Error: '+e.message;
+    setTimeout(()=>{btn.innerHTML='⚡ Run Now';btn.disabled=false;},3000);
+  }
+}
+
 // ── NEWS ──
 
 
@@ -552,7 +631,7 @@ async function loadAll(){
   await Promise.allSettled([
     loadHealth(),loadAccount(),loadPositions(),loadSignals(),
     loadPrice('UK100','uk100'),loadPrice('OIL_BRENT','brent'),
-    loadTrades(),
+    loadTrades(),loadOptimizerStatus(),
   ]);
   _t=setTimeout(loadAll,60000);
 }
