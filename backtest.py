@@ -387,14 +387,12 @@ def grid_search(sig_uk100: list, sig_oil: list) -> list:
 async def fetch_candles(capital_base: str, cst: str, token: str,
                         epic: str, days: int = 30) -> list:
     """Fetch `days` days of 15-min OHLCV candles from Capital.com."""
-    from_dt = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
-        "%Y-%m-%dT%H:%M:%S")
     headers = {"X-SECURITY-TOKEN": token, "CST": cst}
 
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.get(
             f"{capital_base}/api/v1/prices/{epic}",
-            params={"resolution": "MINUTE_15", "max": 5000, "from": from_dt},
+            params={"resolution": "MINUTE_15", "max": 1000},
             headers=headers,
         )
 
