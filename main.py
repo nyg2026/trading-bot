@@ -816,26 +816,32 @@ async def _reconcile_positions():
         for t in tracked:
             if t.symbol not in open_epics:
                 pnl_str = "0"
+                close_lv = "0"
                 try:
                     async with httpx.AsyncClient(timeout=15) as c:
                         hr = await c.get(
                             f"{CAPITAL_BASE}/api/v1/history/transactions",
-                            params={"from": today_str, "type": "ALL", "maxResults": 20},
+                            params={"from": today_str, "type": "ALL", "maxResults": 50},
                             headers=_cap_headers(cst, token),
                         )
+                    sym_parts = [p for p in t.symbol.replace("_", " ").split() if len(p) >= 4]
                     for txn in hr.json().get("transactions", []):
                         instr = txn.get("instrumentName", "").upper()
-                        instr_norm = instr.replace(" ", "").replace("_", "")
+                        instr_norm = instr.replace(" ", "").replace("_", "").replace("-", "")
                         sym_norm   = t.symbol.replace(" ", "").replace("_", "")
-                        if sym_norm in instr_norm or instr_norm.startswith(sym_norm):
-                            raw = str(txn.get("size", "0")).replace("\u00a3","").replace("$","").replace(",","")
-                            pnl_str = raw
+                        matched = sym_norm in instr_norm or instr_norm.startswith(sym_norm)
+                        if not matched:
+                            matched = any(p.upper() in instr_norm for p in sym_parts)
+                        if matched:
+                            pnl_raw = str(txn.get("profitAndLoss") or "0")
+                            pnl_str = pnl_raw.replace("\u00a3","").replace("$","").replace("\u20ac","").replace(",","").strip()
+                            close_lv = str(txn.get("closeLevel") or "0")
                             break
                 except Exception:
                     pass
                 _live_trades.append({
                     "epic": t.symbol, "direction": t.direction,
-                    "openLevel": str(t.entry), "closeLevel": "0",
+                    "openLevel": str(t.entry), "closeLevel": close_lv,
                     "profitAndLoss": pnl_str, "type": "TRADE_RESULT",
                     "date": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S'),
                     "reason": "TP/SL",
