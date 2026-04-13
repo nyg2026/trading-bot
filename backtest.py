@@ -350,6 +350,9 @@ def grid_search(sig_uk100: list, sig_oil: list) -> list:
 
     results = []
     for sl, tp, ms in combos:
+        # ── R:R guard: never allow TP multiplier < SL multiplier ──
+        if tp < sl:
+            continue
         ms = int(ms)
         uk  = backtest(sig_uk100, sl, tp, ms)
         oil = backtest(sig_oil,   sl, tp, ms)
