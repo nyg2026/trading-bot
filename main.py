@@ -27,7 +27,7 @@ import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, Optional
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Header, Request
@@ -89,7 +89,8 @@ MARKET_CLOSE_MINUTE = int(os.getenv("MARKET_CLOSE_MINUTE", "30"))
 
 # Signal engine settings
 MIN_SIGNAL_SCORE  = int(os.getenv("MIN_SIGNAL_SCORE", "5"))  # out of 7
-_optimal_params: dict = {}  # walk-forward optimiser overwrites these at runtime
+_optimal_params: dict = {}  # DISABLED: self-learning optimiser no longer populates this
+_runtime_params: dict = {}  # User-set SL/TP overrides from dashboard POST /config/params
 SCAN_INTERVAL     = int(os.getenv("SCAN_INTERVAL", "300"))   # seconds (5 min = 1 candle)
 CANDLE_RES        = os.getenv("CANDLE_RES", "MINUTE_15")
 CANDLE_COUNT      = int(os.getenv("CANDLE_COUNT", "120"))    # 120 x 15-min = 30 hours history
@@ -482,9 +483,9 @@ def compute_signal(
         "signals":    signals,
     }
 
-    if buy_score >= int(_optimal_params.get("MIN_SIGNAL_SCORE", MIN_SIGNAL_SCORE)) and buy_score > sell_score:
+    if buy_score >= int(_runtime_params.get("MIN_SIGNAL_SCORE", MIN_SIGNAL_SCORE)) and buy_score > sell_score:
         return "BUY", buy_score, details
-    if sell_score >= int(_optimal_params.get("MIN_SIGNAL_SCORE", MIN_SIGNAL_SCORE)) and sell_score > buy_score:
+    if sell_score >= int(_runtime_params.get("MIN_SIGNAL_SCORE", MIN_SIGNAL_SCORE)) and sell_score > buy_score:
         return "SELL", sell_score, details
     return None, max(buy_score, sell_score), details
 
@@ -495,7 +496,7 @@ def compute_position_size(price: float, atr: float, risk_amount: float,
     ATR-based position sizing: qty = risk_amount / (atr x ATR_SL_MULT).
     Ensures actual risk = qty x SL_distance = risk_amount.
     """
-    sl_distance = atr * float(_optimal_params.get("ATR_SL_MULT", ATR_SL_MULT))
+    sl_distance = atr * float(_runtime_params.get("ATR_SL_MULT", ATR_SL_MULT))
     if sl_distance > 0:
         qty = risk_amount / sl_distance
     else:
@@ -764,14 +765,14 @@ async def evaluate_symbol(epic: str):
 
         # ATR-based SL and TP levels
         if direction == "BUY":
-            sl_level = round(price - atr * float(_optimal_params.get("ATR_SL_MULT", ATR_SL_MULT)), 4)
-            tp_raw   = round(price + atr * float(_optimal_params.get("ATR_TP_MULT", ATR_TP_MULT)), 4)
+            sl_level = round(price - atr * float(_runtime_params.get("ATR_SL_MULT", ATR_SL_MULT)), 4)
+            tp_raw   = round(price + atr * float(_runtime_params.get("ATR_TP_MULT", ATR_TP_MULT)), 4)
             # Slippage Control 4: extend TP by SLIPPAGE_BUFFER points so that after
             # the estimated entry slippage cost, the net profit is still the target 2:1 ratio
             tp_level = round(tp_raw + SLIPPAGE_BUFFER, 4) if not PAPER_TRADE else tp_raw
         else:
-            sl_level = round(price + atr * float(_optimal_params.get("ATR_SL_MULT", ATR_SL_MULT)), 4)
-            tp_raw   = round(price - atr * float(_optimal_params.get("ATR_TP_MULT", ATR_TP_MULT)), 4)
+            sl_level = round(price + atr * float(_runtime_params.get("ATR_SL_MULT", ATR_SL_MULT)), 4)
+            tp_raw   = round(price - atr * float(_runtime_params.get("ATR_TP_MULT", ATR_TP_MULT)), 4)
             tp_level = round(tp_raw - SLIPPAGE_BUFFER, 4) if not PAPER_TRADE else tp_raw
 
         # ATR-based position sizing: risk RISK_PCT% of account
@@ -943,8 +944,9 @@ async def lifespan(app: FastAPI):
         sorted(ALLOWED_SYMBOLS),
     )
     asyncio.create_task(scan_loop())
-    asyncio.create_task(_weekly_optimiser())
-    _optimal_params.update(load_optimal_params())
+    # asyncio.create_task(_weekly_optimiser())   # DISABLED: self-learning removed
+    # _optimal_params.update(load_optimal_params())  # DISABLED
+    _runtime_params.update(load_runtime_params())  # Load user SL/TP overrides from /tmp/runtime_params.json
     asyncio.create_task(eod_close_loop())
     yield
     log.info("[STOP] Bot shutting down")
@@ -1258,53 +1260,138 @@ async def _weekly_optimiser() -> None:
 
 @app.post("/optimize")
 async def trigger_optimize():
-    """
-    Manually trigger a walk-forward optimisation.
-    Fetches 30 days of 15-min candles, grid-searches ATR_SL_MULT x ATR_TP_MULT
-    x MIN_SIGNAL_SCORE, and updates the live bot parameters immediately.
-    Takes ~10-30 seconds to run.
-    """
-    global _optimal_params
-    if PAPER_TRADE:
-        # Still allow in paper-trade mode - we just won't fetch live prices
-        pass
-    try:
-        cst, token = await _capital_auth()
-        result = await run_optimisation(CAPITAL_BASE, cst, token, days=30)
-        if "best" in result:
-            _optimal_params.update(result["best"])
-            log.info("[OPTIMISER] Manual run complete: SL=%.2f  TP=%.2f  SCORE=%d",
-                     result["best"]["ATR_SL_MULT"],
-                     result["best"]["ATR_TP_MULT"],
-                     result["best"]["MIN_SIGNAL_SCORE"])
-        return result
-    except Exception as exc:
-        log.error("[OPTIMISER] Manual optimisation failed: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    """DISABLED: self-learning optimiser turned off. Use POST /config/params to set SL/TP manually."""
+    raise HTTPException(
+        status_code=503,
+        detail="Self-learning optimiser disabled. Use POST /config/params to set ATR_SL_MULT / ATR_TP_MULT manually.",
+    )
 
 
 @app.get("/optimize/status")
 async def optimize_status():
-    """Return the currently active trading parameters and their source."""
+    """Return currently active trading parameters. Self-learning is disabled - values come from /config/params or env vars."""
     return {
-        "source": "optimised" if _optimal_params else "env_vars",
+        "enabled": False,
+        "reason": "Self-learning optimiser disabled - manual SL/TP control via POST /config/params",
+        "source": "runtime_override" if _runtime_params else "env_vars",
         "live_params": {
-            "ATR_SL_MULT":      float(_optimal_params.get("ATR_SL_MULT",      ATR_SL_MULT)),
-            "ATR_TP_MULT":      float(_optimal_params.get("ATR_TP_MULT",      ATR_TP_MULT)),
-            "MIN_SIGNAL_SCORE": int(_optimal_params.get("MIN_SIGNAL_SCORE",   MIN_SIGNAL_SCORE)),
+            "ATR_SL_MULT":      float(_runtime_params.get("ATR_SL_MULT",      ATR_SL_MULT)),
+            "ATR_TP_MULT":      float(_runtime_params.get("ATR_TP_MULT",      ATR_TP_MULT)),
+            "MIN_SIGNAL_SCORE": int(_runtime_params.get("MIN_SIGNAL_SCORE",   MIN_SIGNAL_SCORE)),
         },
-        "last_optimised":   _optimal_params.get("last_optimised", None),
-        "backtest_metrics": {
-            "profit_factor": _optimal_params.get("profit_factor"),
-            "win_rate":      _optimal_params.get("win_rate"),
-            "total_trades":  _optimal_params.get("total_trades"),
-        },
+        "last_updated":     _runtime_params.get("last_updated", None),
         "env_var_defaults": {
             "ATR_SL_MULT":      ATR_SL_MULT,
             "ATR_TP_MULT":      ATR_TP_MULT,
             "MIN_SIGNAL_SCORE": MIN_SIGNAL_SCORE,
         },
     }
+
+
+# ── Runtime parameter overrides (dashboard-editable SL/TP) ─────────
+
+RUNTIME_PARAMS_FILE = "/tmp/runtime_params.json"
+
+def load_runtime_params() -> dict:
+    """Load user-set SL/TP overrides from /tmp/runtime_params.json."""
+    try:
+        import json as _json
+        with open(RUNTIME_PARAMS_FILE, "r") as f:
+            data = _json.load(f)
+        log.info("[CONFIG] Loaded runtime params: %s", data)
+        return data
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        log.warning("[CONFIG] Failed to load runtime params: %s", exc)
+        return {}
+
+
+def save_runtime_params(data: dict) -> None:
+    """Persist user-set SL/TP overrides to /tmp/runtime_params.json."""
+    try:
+        import json as _json
+        with open(RUNTIME_PARAMS_FILE, "w") as f:
+            _json.dump(data, f, indent=2)
+    except Exception as exc:
+        log.warning("[CONFIG] Failed to save runtime params: %s", exc)
+
+
+class ConfigParamsPayload(BaseModel):
+    atr_sl_mult:      Optional[float] = None
+    atr_tp_mult:      Optional[float] = None
+    min_signal_score: Optional[int]   = None
+
+
+@app.get("/config/params")
+async def get_config_params():
+    """Return the currently-active SL/TP multipliers and min signal score."""
+    return {
+        "ATR_SL_MULT":      float(_runtime_params.get("ATR_SL_MULT",      ATR_SL_MULT)),
+        "ATR_TP_MULT":      float(_runtime_params.get("ATR_TP_MULT",      ATR_TP_MULT)),
+        "MIN_SIGNAL_SCORE": int(_runtime_params.get("MIN_SIGNAL_SCORE",   MIN_SIGNAL_SCORE)),
+        "source":           "runtime_override" if _runtime_params else "env_vars",
+        "last_updated":     _runtime_params.get("last_updated"),
+        "env_var_defaults": {
+            "ATR_SL_MULT":      ATR_SL_MULT,
+            "ATR_TP_MULT":      ATR_TP_MULT,
+            "MIN_SIGNAL_SCORE": MIN_SIGNAL_SCORE,
+        },
+    }
+
+
+@app.post("/config/params")
+async def set_config_params(payload: ConfigParamsPayload):
+    """Update the SL/TP multipliers at runtime. Rejects combos where TP < SL (bad R:R)."""
+    from datetime import datetime, timezone
+    updates: dict = {}
+    if payload.atr_sl_mult is not None:
+        if payload.atr_sl_mult <= 0 or payload.atr_sl_mult > 10:
+            raise HTTPException(status_code=400, detail="ATR_SL_MULT must be between 0 and 10")
+        updates["ATR_SL_MULT"] = float(payload.atr_sl_mult)
+    if payload.atr_tp_mult is not None:
+        if payload.atr_tp_mult <= 0 or payload.atr_tp_mult > 10:
+            raise HTTPException(status_code=400, detail="ATR_TP_MULT must be between 0 and 10")
+        updates["ATR_TP_MULT"] = float(payload.atr_tp_mult)
+    if payload.min_signal_score is not None:
+        if payload.min_signal_score < 1 or payload.min_signal_score > 7:
+            raise HTTPException(status_code=400, detail="MIN_SIGNAL_SCORE must be 1..7")
+        updates["MIN_SIGNAL_SCORE"] = int(payload.min_signal_score)
+
+    effective_sl = updates.get("ATR_SL_MULT", float(_runtime_params.get("ATR_SL_MULT", ATR_SL_MULT)))
+    effective_tp = updates.get("ATR_TP_MULT", float(_runtime_params.get("ATR_TP_MULT", ATR_TP_MULT)))
+    if effective_tp < effective_sl:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bad risk-reward: TP ({effective_tp}) must be >= SL ({effective_sl}). Aim for TP >= 1.3x SL.",
+        )
+
+    updates["last_updated"] = datetime.now(timezone.utc).isoformat()
+    _runtime_params.update(updates)
+    save_runtime_params(_runtime_params)
+    log.info("[CONFIG] Updated runtime params: %s", updates)
+    return {
+        "ok": True,
+        "updated": updates,
+        "live_params": {
+            "ATR_SL_MULT":      float(_runtime_params.get("ATR_SL_MULT",      ATR_SL_MULT)),
+            "ATR_TP_MULT":      float(_runtime_params.get("ATR_TP_MULT",      ATR_TP_MULT)),
+            "MIN_SIGNAL_SCORE": int(_runtime_params.get("MIN_SIGNAL_SCORE",   MIN_SIGNAL_SCORE)),
+        },
+    }
+
+
+@app.delete("/config/params")
+async def reset_config_params():
+    """Clear runtime overrides and revert to env-var defaults."""
+    _runtime_params.clear()
+    try:
+        import os as _os
+        _os.remove(RUNTIME_PARAMS_FILE)
+    except FileNotFoundError:
+        pass
+    log.info("[CONFIG] Runtime params reset to env-var defaults")
+    return {"ok": True, "reset_to_env_vars": True}
 
 
 @app.post("/bot/pause")
