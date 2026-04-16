@@ -1346,11 +1346,11 @@ async def set_config_params(payload: ConfigParamsPayload):
     from datetime import datetime, timezone
     updates: dict = {}
     if payload.atr_sl_mult is not None:
-        if payload.atr_sl_mult <= 0 or payload.atr_sl_mult > 10:
+        if payload.atr_sl_mult <= 0 or payload.atr_sl_mult > 20:
             raise HTTPException(status_code=400, detail="ATR_SL_MULT must be between 0 and 10")
         updates["ATR_SL_MULT"] = float(payload.atr_sl_mult)
     if payload.atr_tp_mult is not None:
-        if payload.atr_tp_mult <= 0 or payload.atr_tp_mult > 10:
+        if payload.atr_tp_mult <= 0 or payload.atr_tp_mult > 20:
             raise HTTPException(status_code=400, detail="ATR_TP_MULT must be between 0 and 10")
         updates["ATR_TP_MULT"] = float(payload.atr_tp_mult)
     if payload.min_signal_score is not None:
@@ -1358,13 +1358,6 @@ async def set_config_params(payload: ConfigParamsPayload):
             raise HTTPException(status_code=400, detail="MIN_SIGNAL_SCORE must be 1..7")
         updates["MIN_SIGNAL_SCORE"] = int(payload.min_signal_score)
 
-    effective_sl = updates.get("ATR_SL_MULT", float(_runtime_params.get("ATR_SL_MULT", ATR_SL_MULT)))
-    effective_tp = updates.get("ATR_TP_MULT", float(_runtime_params.get("ATR_TP_MULT", ATR_TP_MULT)))
-    if effective_tp < effective_sl:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Bad risk-reward: TP ({effective_tp}) must be >= SL ({effective_sl}). Aim for TP >= 1.3x SL.",
-        )
 
     updates["last_updated"] = datetime.now(timezone.utc).isoformat()
     _runtime_params.update(updates)
