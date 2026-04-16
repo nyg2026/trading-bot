@@ -381,14 +381,14 @@
 
     <div class="card">
       <div class="card-title">⚙️ Risk Parameters</div>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">ATR multipliers for Stop-Loss and Take-Profit. Changes apply immediately — no restart needed. TP must be ≥ SL for positive R:R.</p>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">ATR multipliers for Stop-Loss and Take-Profit. Changes apply immediately — no restart needed.</p>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
         <label style="font-size:12px;font-weight:600;color:var(--muted);">SL Multiplier (ATR ×)
-          <input id="cfg-sl" type="number" step="0.25" min="0.5" max="5" value="1.5"
+          <input id="cfg-sl" type="number" step="0.25" min="0.1" max="20" value="1.5"
             style="display:block;width:100%;margin-top:5px;padding:7px 10px;background:var(--bg);border:1px solid rgba(255,255,255,.12);border-radius:8px;color:var(--text);font-size:14px;">
         </label>
         <label style="font-size:12px;font-weight:600;color:var(--muted);">TP Multiplier (ATR ×)
-          <input id="cfg-tp" type="number" step="0.25" min="0.5" max="10" value="2.0"
+          <input id="cfg-tp" type="number" step="0.25" min="0.1" max="20" value="2.0"
             style="display:block;width:100%;margin-top:5px;padding:7px 10px;background:var(--bg);border:1px solid rgba(255,255,255,.12);border-radius:8px;color:var(--text);font-size:14px;">
         </label>
       </div>
@@ -736,7 +736,7 @@ async function saveConfigParams(){
   const statusEl=document.getElementById('cfg-status');
   const btnEl=document.getElementById('cfg-save-btn');
   if(isNaN(sl)||isNaN(tp)){if(statusEl){statusEl.textContent='\u274C Invalid values';statusEl.style.color='#ef4444';}return;}
-  if(tp<sl){if(statusEl){statusEl.textContent='\u274C TP must be \u2265 SL for positive R:R';statusEl.style.color='#ef4444';}return;}
+
   if(btnEl) btnEl.disabled=true;
   if(statusEl){statusEl.textContent='Saving\u2026';statusEl.style.color='var(--muted)';}
   try{
